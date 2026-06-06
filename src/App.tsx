@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { UserType } from './types';
 import Login from './components/Login';
 import QADashboard from './components/QADashboard';
+import InstructorDashboard from './components/InstructorDashboard';
 import ComingSoon from './components/ComingSoon';
 import { AnimatePresence, motion } from 'motion/react';
 
@@ -38,6 +39,16 @@ export default function App() {
             className="w-full h-full"
           >
             <QADashboard onLogout={handleLogout} />
+          </motion.div>
+        ) : (currentUser.type === 'instructor') ? (
+          <motion.div
+            key="instructor-dashboard"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="w-full h-full"
+          >
+            <InstructorDashboard onLogout={handleLogout} instructorName={currentUser.name || undefined} />
           </motion.div>
         ) : (
           <motion.div
