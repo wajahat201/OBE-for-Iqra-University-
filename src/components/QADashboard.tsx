@@ -604,29 +604,6 @@ export default function QADashboard({ onLogout }: QADashboardProps) {
   return (
     <div className="flex flex-col h-screen overflow-hidden frosted-bg text-slate-800 font-sans">
       
-      {/* ResultMate Desktop Application Window Frame Title bar */}
-      <div className="bg-[#0f172a] text-slate-300 font-mono text-[11px] px-4 py-1.5 flex items-center justify-between select-none border-b border-indigo-950 shrink-0">
-        <div className="flex items-center gap-2">
-          {/* Custom Desktop Icon */}
-          <FileText className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-          <span className="font-semibold text-slate-100">ResultMate</span>
-          <span className="text-indigo-400">© Hitec : Version 4.6</span> 
-          <span className="text-slate-500">|</span> 
-          <span className="text-indigo-300 font-sans font-medium uppercase tracking-[0.1em] text-[9.5px]">Iqra University OBE Platform</span>
-        </div>
-        <div className="flex items-center gap-3">
-          {activeDepartment && (
-            <span className="text-[10px] bg-slate-900 border border-slate-800 px-2 py-0.5 rounded text-indigo-400">
-              {activeDepartment.name} — Active Session
-            </span>
-          )}
-          <div className="flex gap-1.5">
-            <span className="w-2 px-1 text-slate-500 hover:text-white cursor-pointer select-none">_</span>
-            <span className="w-2 px-1 text-slate-500 hover:text-white cursor-pointer select-none">▢</span>
-            <span className="w-2 px-1 text-slate-500 hover:text-red-500 cursor-pointer select-none" onClick={onLogout}>✕</span>
-          </div>
-        </div>
-      </div>
 
       {/* Classic Desktop-styled horizontal Menu Bar */}
       <header className="bg-[#f1f5f9] border-b border-slate-300 z-40 shrink-0 select-none relative">
@@ -635,34 +612,7 @@ export default function QADashboard({ onLogout }: QADashboardProps) {
           {/* Menu triggers */}
           <div className="flex flex-wrap items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
             
-            {/* EDIT MENU */}
-            <div className="relative">
-              <button
-                onClick={() => setOpenMenu(openMenu === 'edit' ? null : 'edit')}
-                onMouseEnter={() => openMenu && setOpenMenu('edit')}
-                className={`px-3 py-1 text-xs font-sans font-semibold text-slate-700 hover:bg-slate-200 hover:text-slate-900 rounded cursor-pointer transition-all ${openMenu === 'edit' ? 'bg-slate-200 text-slate-900 shadow-sm' : ''}`}
-              >
-                Edit
-              </button>
-              {openMenu === 'edit' && (
-                <div className="absolute left-0 mt-1 w-64 bg-white border border-slate-300 rounded-lg shadow-xl py-1 z-50 animate-in fade-in slide-in-from-top-1 duration-100">
-                  <button
-                    onClick={() => { setActiveModule('po_configure'); setOpenMenu(null); }}
-                    className="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-indigo-50 hover:text-indigo-950 flex items-center gap-2 rounded text-left"
-                  >
-                    <Settings className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                    <span>Configure Objectives (PO1-PO4)</span>
-                  </button>
-                  <button
-                    onClick={() => { setActiveModule('vision_mission'); setOpenMenu(null); }}
-                    className="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-indigo-50 hover:text-indigo-950 flex items-center gap-2 rounded text-left"
-                  >
-                    <Compass className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                    <span>Edit Dept Vision & Mission</span>
-                  </button>
-                </div>
-              )}
-            </div>
+
 
             {/* VIEW MENU */}
             <div className="relative">
@@ -1026,14 +976,14 @@ export default function QADashboard({ onLogout }: QADashboardProps) {
                   {data.departments.map((dept) => {
                     const isEditing = editingDeptId === dept.id;
                     return (
-                      <div key={dept.id} className="bg-white border border-slate-300 rounded-2xl p-6 shadow-sm relative overflow-hidden transition-all duration-200 text-left">
+                      <div key={dept.id} className="bg-white border-2 border-slate-200 rounded-3xl p-8 shadow-sm relative overflow-hidden transition-all duration-200 text-left">
                         {/* Minimal left side accent stripe */}
-                        <div className="absolute left-0 top-0 bottom-0 w-1 bg-slate-700"></div>
+                        <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-slate-800"></div>
                         
-                        <div className="flex items-center justify-between border-b border-slate-200 pb-3.5 mb-4 pl-2">
+                        <div className="flex items-center justify-between border-b border-slate-200 pb-5 mb-6 pl-2">
                           <div>
-                            <span className="text-[9px] font-mono font-bold tracking-widest text-slate-400 uppercase">ACADEMIC DEPARTMENT SPECIFICATIONS</span>
-                            <h3 className="text-base font-bold font-sans text-slate-900 tracking-tight mt-0.5">
+                            <span className="text-xs font-sans font-extrabold tracking-wider text-indigo-650 uppercase">ACADEMIC DEPARTMENT SPECIFICATIONS</span>
+                            <h3 className="text-2xl font-extrabold font-sans text-slate-950 tracking-tight mt-1">
                               {dept.name}
                             </h3>
                           </div>
@@ -1045,7 +995,7 @@ export default function QADashboard({ onLogout }: QADashboardProps) {
                                 setTempVision(dept.vision);
                                 setTempMission(dept.mission);
                               }}
-                              className="px-3.5 py-1.5 text-xs font-bold text-slate-700 bg-slate-50 hover:bg-slate-100 rounded-lg flex items-center gap-1.5 transition cursor-pointer border border-slate-300"
+                              className="px-4 py-2 text-xs font-extrabold text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl flex items-center gap-1.5 transition cursor-pointer border border-slate-300"
                             >
                               <Edit className="w-3.5 h-3.5" />
                               Edit Charter Draft
@@ -1076,13 +1026,13 @@ export default function QADashboard({ onLogout }: QADashboardProps) {
                                   }
                                 }}
                                 disabled={savingLoad}
-                                className="px-3.5 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-lg flex items-center gap-1.5 transition cursor-pointer"
+                                className="px-4 py-2 text-xs font-extrabold text-white bg-indigo-650 hover:bg-indigo-700 disabled:opacity-50 rounded-xl flex items-center gap-1.5 transition cursor-pointer shadow-sm"
                               >
                                 {savingLoad ? 'Saving...' : '✓ Save Changes'}
                               </button>
                               <button
                                 onClick={() => setEditingDeptId(null)}
-                                className="px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-lg transition cursor-pointer"
+                                className="px-3.5 py-2 text-xs font-extrabold text-slate-750 hover:bg-slate-100 rounded-xl transition cursor-pointer border border-slate-300"
                               >
                                 Cancel
                               </button>
@@ -1090,12 +1040,12 @@ export default function QADashboard({ onLogout }: QADashboardProps) {
                           )}
                         </div>
 
-                        <div className="space-y-4 pl-2 text-left">
+                        <div className="space-y-6 pl-2 text-left">
                           {/* Vision section */}
-                          <div className="space-y-1">
-                            <h4 className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">DEPARTMENT VISION</h4>
+                          <div className="space-y-2">
+                            <h4 className="text-base font-sans font-extrabold tracking-wide text-slate-950 uppercase border-l-4 border-indigo-600 pl-2.5">DEPARTMENT VISION</h4>
                             {!isEditing ? (
-                              <p className="text-slate-705 text-xs font-sans leading-relaxed italic pr-4">
+                              <p className="text-slate-900 text-[16px] font-sans leading-relaxed italic pr-4 font-normal">
                                 "{dept.vision}"
                               </p>
                             ) : (
@@ -1103,17 +1053,17 @@ export default function QADashboard({ onLogout }: QADashboardProps) {
                                 value={tempVision}
                                 onChange={(e) => setTempVision(e.target.value)}
                                 rows={2}
-                                className="w-full text-xs p-3 font-sans bg-slate-50 border border-slate-300 rounded-lg focus:border-indigo-500 outline-none text-slate-800 leading-relaxed font-normal"
+                                className="w-full text-base p-4 font-sans bg-slate-50 border border-slate-300 rounded-xl focus:border-indigo-500 outline-none text-slate-900 leading-relaxed font-normal"
                                 placeholder="Enter department vision statement..."
                               />
                             )}
                           </div>
 
                           {/* Mission section */}
-                          <div className="space-y-1">
-                            <h4 className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">DEPARTMENT MISSION</h4>
+                          <div className="space-y-2">
+                            <h4 className="text-base font-sans font-extrabold tracking-wide text-slate-950 uppercase border-l-4 border-indigo-600 pl-2.5">DEPARTMENT MISSION</h4>
                             {!isEditing ? (
-                              <p className="text-slate-600 text-xs font-sans leading-relaxed pr-4">
+                              <p className="text-slate-900 text-[16px] font-sans leading-relaxed pr-4 font-normal">
                                 {dept.mission}
                               </p>
                             ) : (
@@ -1121,7 +1071,7 @@ export default function QADashboard({ onLogout }: QADashboardProps) {
                                 value={tempMission}
                                 onChange={(e) => setTempMission(e.target.value)}
                                 rows={4}
-                                className="w-full text-xs p-3 font-sans bg-slate-50 border border-slate-300 rounded-lg focus:border-indigo-500 outline-none text-slate-800 leading-relaxed font-normal"
+                                className="w-full text-base p-4 font-sans bg-slate-50 border border-slate-300 rounded-xl focus:border-indigo-500 outline-none text-slate-900 leading-relaxed font-normal"
                                 placeholder="Enter department mission statement..."
                               />
                             )}
@@ -1130,15 +1080,6 @@ export default function QADashboard({ onLogout }: QADashboardProps) {
                       </div>
                     );
                   })}
-                </div>
-
-                {/* Nice helper footer cards */}
-                <div className="bg-slate-50 border border-slate-300 rounded-2xl p-6 text-center select-none space-y-3">
-                  <Compass className="w-8 h-8 text-slate-400 mx-auto" />
-                  <h4 className="font-bold text-slate-800 text-xs font-sans animate-pulse">Ready to audit Course mappings?</h4>
-                  <p className="text-xs text-slate-500 max-w-md mx-auto">
-                    Please use the <strong className="text-indigo-950 font-extrabold">PROGRAM selector in the menu bar at the top</strong> to jump directly into interactive matrix alignment, course-specific metrics, and OBE integrity checks.
-                  </p>
                 </div>
               </div>
             ) : (
@@ -1486,11 +1427,11 @@ export default function QADashboard({ onLogout }: QADashboardProps) {
                   <div className="p-6 md:p-8 space-y-8">
                     
                     {/* Program Vision Block */}
-                    <div className="space-y-3 bg-slate-50 border border-slate-200 p-6 rounded-2xl shadow-xs text-left relative overflow-hidden">
-                      <div className="absolute left-0 top-0 bottom-0 w-1 bg-indigo-600"></div>
+                    <div className="space-y-4 bg-slate-50 border border-slate-200 p-8 rounded-3xl shadow-xs text-left relative overflow-hidden">
+                      <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-indigo-600"></div>
                       <div className="flex items-center gap-2 pl-2">
-                        <Award className="w-5 h-5 text-indigo-600 shrink-0" />
-                        <h4 className="font-serif font-bold text-slate-800 text-base">PROGRAM VISION STATEMENT</h4>
+                        <Award className="w-5 h-5 text-indigo-650 shrink-0" />
+                        <h4 className="font-sans font-extrabold text-slate-950 text-base tracking-wide uppercase">PROGRAM VISION STATEMENT</h4>
                       </div>
                       
                       {isConfiguring ? (
@@ -1499,24 +1440,24 @@ export default function QADashboard({ onLogout }: QADashboardProps) {
                             value={editProgramVision}
                             onChange={(e) => setEditProgramVision(e.target.value)}
                             rows={3}
-                            className="w-full p-4 text-sm bg-white border border-indigo-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-slate-800 font-medium"
+                            className="w-full p-4 text-base bg-white border border-indigo-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900 font-normal"
                             placeholder="Type program vision statement..."
                           />
                           <p className="text-[10px] text-slate-400 italic">This will alter the active program vision across all linked interfaces.</p>
                         </div>
                       ) : (
-                        <p className="font-sans text-sm md:text-base leading-relaxed italic text-slate-700 pl-9 py-1 font-medium">
+                        <p className="font-sans text-base leading-relaxed italic text-slate-900 pl-9 py-1 font-medium">
                           "{editProgramVision || '(Program vision statement undefined)'}"
                         </p>
                       )}
                     </div>
 
                     {/* Program Mission Block */}
-                    <div className="space-y-3 bg-slate-50 border border-slate-200 p-6 rounded-2xl shadow-xs text-left relative overflow-hidden">
-                      <div className="absolute left-0 top-0 bottom-0 w-1 bg-indigo-600"></div>
+                    <div className="space-y-4 bg-slate-50 border border-slate-200 p-8 rounded-3xl shadow-xs text-left relative overflow-hidden">
+                      <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-indigo-600"></div>
                       <div className="flex items-center gap-2 pl-2">
-                        <Compass className="w-5 h-5 text-indigo-600 shrink-0" />
-                        <h4 className="font-serif font-bold text-slate-800 text-base">PROGRAM MISSION STATEMENT</h4>
+                        <Compass className="w-5 h-5 text-indigo-650 shrink-0" />
+                        <h4 className="font-sans font-extrabold text-slate-950 text-base tracking-wide uppercase">PROGRAM MISSION STATEMENT</h4>
                       </div>
 
                       {isConfiguring ? (
@@ -1525,13 +1466,13 @@ export default function QADashboard({ onLogout }: QADashboardProps) {
                             value={editProgramMission}
                             onChange={(e) => setEditProgramMission(e.target.value)}
                             rows={5}
-                            className="w-full p-4 text-sm bg-white border border-indigo-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-slate-800 font-medium"
+                            className="w-full p-4 text-base bg-white border border-indigo-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900 font-normal"
                             placeholder="Type program mission statement..."
                           />
                           <p className="text-[10px] text-slate-400 italic">This will alter the active program mission across all linked interfaces.</p>
                         </div>
                       ) : (
-                        <p className="font-sans text-sm leading-relaxed text-slate-700 pl-9 py-1 font-medium">
+                        <p className="font-sans text-base leading-relaxed text-slate-900 pl-9 py-1 font-medium">
                           {editProgramMission || '(Program mission statement undefined)'}
                         </p>
                       )}

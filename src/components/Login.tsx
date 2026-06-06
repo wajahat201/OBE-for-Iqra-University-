@@ -8,7 +8,7 @@ interface LoginProps {
 }
 
 export default function Login({ onLogin }: LoginProps) {
-  const [userType, setUserType] = useState<UserType>('student');
+  const [userType, setUserType] = useState<UserType>('qa');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -55,9 +55,9 @@ export default function Login({ onLogin }: LoginProps) {
   };
 
   const userTypes: { type: UserType; label: string; icon: any }[] = [
-    { type: 'student',    label: 'Student',               icon: GraduationCap },
-    { type: 'instructor', label: 'Instructor',             icon: BookOpen      },
     { type: 'qa',         label: 'QA / Quality Assurance', icon: ShieldCheck   },
+    { type: 'instructor', label: 'Instructor',             icon: BookOpen      },
+    { type: 'student',    label: 'Student',               icon: GraduationCap },
   ];
 
   return (
