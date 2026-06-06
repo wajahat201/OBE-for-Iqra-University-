@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { UserType } from '../types';
 import { GraduationCap, BookOpen, ShieldCheck } from 'lucide-react';
+import { BASE_URL } from '../services/apiService';
 
 interface LoginProps {
   onLogin: (userType: UserType, name: string) => void;
@@ -20,7 +21,7 @@ export default function Login({ onLogin }: LoginProps) {
     setLoading(true);
 
     try {
-      const res = await fetch('/api/auth/login/', {
+      const res = await fetch(`${BASE_URL}/auth/login/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
