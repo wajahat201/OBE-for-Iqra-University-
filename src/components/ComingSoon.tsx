@@ -1,4 +1,5 @@
 import { motion } from 'motion/react';
+import { ArrowLeft } from 'lucide-react';
 
 interface ComingSoonProps {
   userType: string;
@@ -20,9 +21,10 @@ export default function ComingSoon({ userType, onLogout }: ComingSoonProps) {
         </p>
         <button
           onClick={onLogout}
-          className="w-full py-3 bg-indigo-600 text-white rounded-xl font-sans font-medium hover:bg-indigo-700 transition-colors shadow-md"
+          className="w-full py-3 bg-indigo-600 text-white rounded-xl font-sans font-medium hover:bg-indigo-700 transition-colors shadow-md flex items-center justify-center gap-2 cursor-pointer"
         >
-          Back to Login
+          <ArrowLeft className="w-4 h-4" />
+          <span>Back to Login</span>
         </button>
       </motion.div>
     </div>

@@ -12,6 +12,7 @@ import {
   FileSpreadsheet, 
   ChevronRight, 
   ChevronLeft, 
+  ArrowLeft,
   LogOut, 
   BookOpenCheck,
   Building,
@@ -22,7 +23,9 @@ import {
   ClipboardList,
   Flame,
   Info,
-  Upload
+  Upload,
+  Pencil,
+  X
 } from 'lucide-react';
 import { BASE_URL } from '../services/apiService';
 import { Course, Department, Program } from '../types';
@@ -320,6 +323,11 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
   const [editDeptId, setEditDeptId] = useState('computing');
   const [editProgramId, setEditProgramId] = useState('bscs');
   const [editCreditHours, setEditCreditHours] = useState(3);
+
+  // Edit Student states
+  const [editingStudentReg, setEditingStudentReg] = useState<string | null>(null);
+  const [editStudentRegVal, setEditStudentRegVal] = useState<string>('');
+  const [editStudentNameVal, setEditStudentNameVal] = useState<string>('');
 
   // Single Course context helper
   const selectedCourse = useMemo(() => {
@@ -808,6 +816,66 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
     }));
   };
 
+  const handleStartEditStudent = (student: CourseStudent) => {
+    setEditingStudentReg(student.regNo);
+    setEditStudentRegVal(student.regNo);
+    setEditStudentNameVal(student.name);
+  };
+
+  const handleCancelEditStudent = () => {
+    setEditingStudentReg(null);
+    setEditStudentRegVal('');
+    setEditStudentNameVal('');
+  };
+
+  const handleUpdateStudentDetail = (oldRegNo: string) => {
+    if (!selectedCourse) return;
+
+    const cleanNewRegNo = editStudentRegVal.trim().toUpperCase();
+    const cleanNewName = editStudentNameVal.trim();
+
+    if (!cleanNewRegNo) {
+      alert("Registration number cannot be empty!");
+      return;
+    }
+    if (!cleanNewName) {
+      alert("Student name cannot be empty!");
+      return;
+    }
+
+    // Check duplication if they changed registration number
+    if (cleanNewRegNo !== oldRegNo) {
+      const exists = selectedCourse.students.some(s => s.regNo === cleanNewRegNo);
+      if (exists) {
+        alert(`Student with registration number "${cleanNewRegNo}" already exists!`);
+        return;
+      }
+    }
+
+    setCourses(prev => prev.map(c => {
+      if (c.id === selectedCourse.id) {
+        return {
+          ...c,
+          students: c.students.map(s => {
+            if (s.regNo === oldRegNo) {
+              return {
+                ...s,
+                regNo: cleanNewRegNo,
+                name: cleanNewName
+              };
+            }
+            return s;
+          })
+        };
+      }
+      return c;
+    }));
+
+    setEditingStudentReg(null);
+    setEditStudentRegVal('');
+    setEditStudentNameVal('');
+  };
+
   // Excel / CSV File Handlers
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1021,6 +1089,87 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
     return parseFloat(aggregate.toFixed(1));
   };
 
+  const handleExportCourseSheet = () => {
+    if (!selectedCourse) return;
+
+    const csvRows: string[][] = [];
+
+    // Header info matching core course details
+    csvRows.push([`Course Title:`, selectedCourse.title]);
+    csvRows.push([`Course Code:`, selectedCourse.code]);
+    csvRows.push([`Instructor:`, instructorName]);
+    csvRows.push([`Credit Hours:`, `${selectedCourse.creditHours}-0-${selectedCourse.creditHours}`]);
+    csvRows.push([`Semester:`, `Sp-2026`]);
+    csvRows.push([`Section:`, `All`]);
+    csvRows.push([]); // spacer line
+
+    // Table Header
+    const headers = ['S.#', 'Registration No.', 'Student Name'];
+    tableColumns.forEach(col => {
+      headers.push(`${col.label} (Max ${col.totalMarks})`);
+    });
+    headers.push('TMarks', 'Grade');
+    csvRows.push(headers);
+
+    // Table Data row by row
+    selectedCourse.students.forEach((std, idx) => {
+      const row: string[] = [String(idx + 1), std.regNo, std.name];
+      tableColumns.forEach(col => {
+        const markVal = getStudentMark(std, col.categoryName, col.unitNo, col.totalMarks);
+        row.push(String(markVal));
+      });
+      const tMarks = calculateStudentCourseTotal(std);
+      const grade = getLetterGrade(tMarks);
+      row.push(String(tMarks), grade);
+      csvRows.push(row);
+    });
+
+    // Add Average Row if students exist
+    if (selectedCourse.students.length > 0) {
+      const stdCount = selectedCourse.students.length;
+      const colAverages = tableColumns.map(col => {
+        const sum = selectedCourse.students.reduce((acc, s) => {
+          return acc + getStudentMark(s, col.categoryName, col.unitNo, col.totalMarks);
+        }, 0);
+        return (sum / stdCount).toFixed(2);
+      });
+
+      const tMarksAverage = (selectedCourse.students.reduce((acc, s) => {
+        return acc + calculateStudentCourseTotal(s);
+      }, 0) / stdCount).toFixed(2);
+
+      const averageRow: string[] = ['F1', 'Average', 'Class Outcome Average'];
+      colAverages.forEach(avg => {
+        averageRow.push(avg);
+      });
+      averageRow.push(tMarksAverage, '-');
+      csvRows.push(averageRow);
+    }
+
+    const csvContent = csvRows
+      .map(row => row.map(val => {
+        const str = String(val);
+        if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+          return `"${str.replace(/"/g, '""')}"`;
+        }
+        return str;
+      }).join(','))
+      .join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    
+    // Create clean file name matching the name of the course
+    const fileName = `${selectedCourse.code} - ${selectedCourse.title}.csv`.replace(/[/\\?%*:|"<>]+/g, '_');
+    link.setAttribute('download', fileName);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="min-h-screen flex flex-col font-sans frosted-bg text-slate-800">
       
@@ -1031,6 +1180,16 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
           {/* Menu items list */}
           <div className="flex flex-wrap items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
             
+            {/* BACK TO LOGIN */}
+            <button
+              onClick={onLogout}
+              className="flex items-center gap-1.5 px-3 py-1 text-xs font-sans font-bold text-slate-700 hover:text-indigo-600 hover:bg-slate-200 rounded cursor-pointer transition-all mr-2.5 border-r border-slate-300 pr-3.5"
+              title="Back to login selection"
+            >
+              <ArrowLeft className="w-3.5 h-3.5 text-slate-500" />
+              <span>Back</span>
+            </button>
+
             {/* FILE MENU */}
             <div className="relative">
               <button
@@ -1121,15 +1280,6 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
               </button>
             </div>
 
-            {/* GRADE SYSTEM */}
-            <div className="relative">
-              <button
-                onClick={() => { setActiveTab('grade'); setOpenMenu(null); }}
-                className={`px-3 py-1 text-xs font-sans font-semibold text-slate-755 hover:bg-slate-200 hover:text-slate-900 rounded cursor-pointer transition-all ${activeTab === 'grade' ? 'bg-slate-200 text-indigo-955 font-bold' : ''}`}
-              >
-                Grade Sheets
-              </button>
-            </div>
 
             {/* REGISTERED ROSTER */}
             <div className="relative">
@@ -1137,7 +1287,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                 onClick={() => { setActiveTab('students'); setOpenMenu(null); }}
                 className={`px-3 py-1 text-xs font-sans font-semibold text-slate-755 hover:bg-slate-200 hover:text-slate-900 rounded cursor-pointer transition-all ${activeTab === 'students' ? 'bg-slate-200 text-indigo-955 font-bold' : ''}`}
               >
-                Roster
+                Add Student
               </button>
             </div>
 
@@ -1154,7 +1304,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                 <div className="absolute left-0 mt-1 w-64 bg-white border border-slate-300 rounded-lg shadow-xl py-1 z-50">
                   <button
                     onClick={() => { 
-                      alert('Feature mock-up: Custom Marks Ledger excel export scheduled.');
+                      handleExportCourseSheet();
                       setOpenMenu(null);
                     }}
                     className="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-indigo-50 hover:text-indigo-950 flex items-center gap-2 rounded text-left font-medium"
@@ -1511,7 +1661,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                       </p>
                     </div>
                     <div className="text-xs font-mono font-bold text-slate-655 bg-slate-100 border border-slate-205 rounded px-3 py-1">
-                      Assessing {selectedCourse.students.length} students rostered.
+                      Assessing {selectedCourse.students.length} enrolled students.
                     </div>
                   </div>
 
@@ -1750,7 +1900,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                     <div>
                       <h3 className="text-base font-bold text-slate-900 flex items-center gap-1.5">
                         <Users className="w-4 h-4 text-indigo-600" />
-                        Registered Student Roster
+                        Add Student
                       </h3>
                       <p className="text-xs text-slate-600 mt-1">
                         Define students enrolled in this course specification. Enrollment requires the <strong className="text-indigo-950 font-bold">registration number</strong> as the unique identifier.
@@ -1930,38 +2080,100 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                         <thead>
                           <tr className="bg-slate-50 text-slate-705 border-b border-slate-200 font-bold">
                             <th className="py-2.5 px-4 w-12 text-center">S.#</th>
-                            <th className="py-2.5 px-4">Registration No.</th>
-                            <th className="py-2.5 px-4">Student Name</th>
-                            <th className="py-2.5 px-4 text-center">Unenroll</th>
+                            <th className="py-2.5 px-4 font-sans">Registration No.</th>
+                            <th className="py-2.5 px-4 font-sans">Student Name</th>
+                            <th className="py-2.5 px-4 text-center w-28 font-sans">Actions</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-200 font-mono text-slate-700">
-                          {selectedCourse.students.map((student, index) => (
-                            <tr key={student.regNo} className="hover:bg-slate-55">
-                              <td className="py-3 px-4 text-center text-slate-400">
-                                {index + 1}
-                              </td>
-                              <td className="py-3 px-4 text-indigo-650 font-bold font-mono text-[11px]">
-                                {student.regNo}
-                              </td>
-                              <td className="py-3 px-4 font-sans text-slate-800">
-                                {student.name}
-                              </td>
-                              <td className="py-3 px-4 text-center">
-                                <button
-                                  onClick={() => handleUnenrollStudent(student.regNo)}
-                                  className="text-slate-400 hover:text-rose-600 p-1.5 rounded hover:bg-rose-50 transition-all font-sans cursor-pointer"
-                                  title="Unenroll student"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5 mx-auto" />
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
+                          {selectedCourse.students.map((student, index) => {
+                            const isEditing = editingStudentReg === student.regNo;
+                            return (
+                              <tr key={student.regNo} className={isEditing ? "bg-indigo-50/40" : "hover:bg-slate-55"}>
+                                <td className="py-3 px-4 text-center text-slate-400 font-mono">
+                                  {index + 1}
+                                </td>
+                                {isEditing ? (
+                                  <>
+                                    <td className="py-2 px-3">
+                                      <input
+                                        type="text"
+                                        value={editStudentRegVal}
+                                        onChange={(e) => setEditStudentRegVal(e.target.value)}
+                                        className="bg-white border border-slate-300 rounded px-2 py-1 text-indigo-700 font-bold font-mono text-[11px] w-full focus:ring-2 focus:ring-indigo-400 outline-none"
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') handleUpdateStudentDetail(student.regNo);
+                                          if (e.key === 'Escape') handleCancelEditStudent();
+                                        }}
+                                        autoFocus
+                                      />
+                                    </td>
+                                    <td className="py-2 px-3">
+                                      <input
+                                        type="text"
+                                        value={editStudentNameVal}
+                                        onChange={(e) => setEditStudentNameVal(e.target.value)}
+                                        className="bg-white border border-slate-300 rounded px-2 py-1 text-slate-900 font-sans text-xs w-full focus:ring-2 focus:ring-indigo-400 outline-none"
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') handleUpdateStudentDetail(student.regNo);
+                                          if (e.key === 'Escape') handleCancelEditStudent();
+                                        }}
+                                      />
+                                    </td>
+                                    <td className="py-2 px-4 text-center">
+                                      <div className="flex items-center justify-center gap-1">
+                                        <button
+                                          onClick={() => handleUpdateStudentDetail(student.regNo)}
+                                          className="text-emerald-600 hover:text-emerald-700 p-1.5 rounded hover:bg-emerald-50 transition-all font-sans cursor-pointer"
+                                          title="Save changes"
+                                        >
+                                          <Check className="w-3.5 h-3.5 mx-auto" />
+                                        </button>
+                                        <button
+                                          onClick={handleCancelEditStudent}
+                                          className="text-slate-400 hover:text-slate-600 p-1.5 rounded hover:bg-slate-100 transition-all font-sans cursor-pointer"
+                                          title="Cancel edit"
+                                        >
+                                          <X className="w-3.5 h-3.5 mx-auto" />
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </>
+                                ) : (
+                                  <>
+                                    <td className="py-3 px-4 text-indigo-650 font-bold font-mono text-[11px]">
+                                      {student.regNo}
+                                    </td>
+                                    <td className="py-3 px-4 font-sans text-slate-800">
+                                      {student.name}
+                                    </td>
+                                    <td className="py-3 px-4 text-center">
+                                      <div className="flex items-center justify-center gap-1.5">
+                                        <button
+                                          onClick={() => handleStartEditStudent(student)}
+                                          className="text-slate-400 hover:text-indigo-600 p-1.5 rounded hover:bg-indigo-50 transition-all font-sans cursor-pointer"
+                                          title="Edit student details"
+                                        >
+                                          <Pencil className="w-3.5 h-3.5 mx-auto" />
+                                        </button>
+                                        <button
+                                          onClick={() => handleUnenrollStudent(student.regNo)}
+                                          className="text-slate-400 hover:text-rose-600 p-1.5 rounded hover:bg-rose-50 transition-all font-sans cursor-pointer"
+                                          title="Unenroll student"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5 mx-auto" />
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </>
+                                )}
+                              </tr>
+                            );
+                          })}
                           {selectedCourse.students.length === 0 && (
                             <tr>
                               <td colSpan={4} className="py-8 text-center text-slate-500 font-sans">
-                                Roster empty. Register students to view the assessment grid.
+                                No students enrolled yet. Register students to view the assessment grid.
                               </td>
                             </tr>
                           )}
@@ -1990,7 +2202,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                     </div>
 
                     <button
-                      onClick={() => alert('Feature mock-up: Custom Marks Ledger excel export scheduled.')}
+                      onClick={handleExportCourseSheet}
                       className="px-3 py-1.5 border border-slate-300 text-slate-755 hover:bg-slate-100 rounded-lg text-xs font-bold shadow-xs transition-all cursor-pointer"
                     >
                       Export Excel
@@ -2091,7 +2303,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
 
                     <div className="flex gap-2">
                       <button
-                        onClick={() => alert('Dynamic Marks Sheet exported successfully to spreadsheet.')}
+                        onClick={handleExportCourseSheet}
                         className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
                       >
                         <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -2240,7 +2452,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                               <td colSpan={5 + tableColumns.length} className="py-12 bg-slate-50/50 text-center text-slate-505 font-sans">
                                 <FileSpreadsheet className="w-8 h-8 text-slate-350 mx-auto mb-2 animate-pulse" />
                                 <h5 className="font-bold text-slate-700">Student Register is empty</h5>
-                                <p className="text-[10px] text-slate-500 mt-1">Please enroll students via "Roster" tab to populate and edit marks ledger entries.</p>
+                                <p className="text-[10px] text-slate-500 mt-1">Please enroll students via "Add Student" tab to populate and edit marks ledger entries.</p>
                               </td>
                             </tr>
                           )}

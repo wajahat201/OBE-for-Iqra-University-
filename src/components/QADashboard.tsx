@@ -11,6 +11,7 @@ import {
   Search, 
   ChevronLeft, 
   ChevronRight, 
+  ArrowLeft, 
   GraduationCap, 
   BookOpen, 
   AlertCircle, 
@@ -611,6 +612,15 @@ export default function QADashboard({ onLogout }: QADashboardProps) {
           
           {/* Menu triggers */}
           <div className="flex flex-wrap items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+            {/* BACK TO LOGIN */}
+            <button
+              onClick={onLogout}
+              className="flex items-center gap-1.5 px-3 py-1 text-xs font-sans font-bold text-slate-700 hover:text-indigo-600 hover:bg-slate-200 rounded cursor-pointer transition-all mr-2.5 border-r border-slate-300 pr-3.5"
+              title="Back to login selection"
+            >
+              <ArrowLeft className="w-3.5 h-3.5 text-slate-500" />
+              <span>Back</span>
+            </button>
             
 
 
