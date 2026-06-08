@@ -1,4 +1,4 @@
-import { OBEData, Department, Program, GA, Course, ProgramObjective } from '../types';
+import { OBEData, Department, Program, GA, Course, ProgramObjective, InstructorCourse } from '../types';
 
 export const BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:8000/api';
 
@@ -381,5 +381,238 @@ export const apiService = {
     const updatedLocalData = { ...localData, courses: updatedCourses };
     saveLocalStorageData(updatedLocalData);
     return data;
+  },
+
+  async getInstructorCourses(): Promise<InstructorCourse[]> {
+    try {
+      const response = await fetch(`${BASE_URL}/instructor/courses/`, {
+        headers: getHeaders(),
+      });
+      if (!response.ok) throw new Error('Failed to fetch instructor courses');
+      const data = await response.json();
+      if (Array.isArray(data)) return data;
+      throw new Error('Malformed instructor courses data received');
+    } catch (err) {
+      console.warn("Backend API for instructor offline or failed. Falling back to local/dummy placeholders.", err);
+      return getLocalInstructorCourses();
+    }
+  },
+
+  async saveInstructorCourses(courses: InstructorCourse[]): Promise<InstructorCourse[]> {
+    // Save to local storage first for resilient fallback
+    localStorage.setItem('IQRA_OBE_INSTRUCTOR_COURSES', JSON.stringify(courses));
+    try {
+      const response = await fetch(`${BASE_URL}/instructor/courses/`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ courses }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (Array.isArray(data)) return data;
+      }
+    } catch (err) {
+      console.warn("Saving instructor courses to backend failed, synchronized offline instead.", err);
+    }
+    return courses;
   }
+};
+
+// Pre-populated high-fidelity dummy courses as placeholders if backend is down
+const DUMMY_PLAYGROUND_COURSES: InstructorCourse[] = [
+  {
+    id: "course-demo-1",
+    code: "SE-311",
+    title: "Software Engineering",
+    departmentId: "computing",
+    departmentName: "Department of Computing and Technology",
+    programId: "bscs",
+    programName: "Bachelor of Science in Computer Science (BSCS)",
+    creditHours: 3,
+    categories: [
+      { name: "Assignments", percentage: 15, units: 3 },
+      { name: "Quizzes", percentage: 10, units: 3 },
+      { name: "Class Participation", percentage: 5, units: 1 },
+      { name: "Class Project", percentage: 15, units: 1 },
+      { name: "Presentation", percentage: 5, units: 1 },
+      { name: "Lab Project", percentage: 0, units: 0 },
+      { name: "Sessionals", percentage: 0, units: 0 },
+      { name: "Mid Term", percentage: 20, units: 1 },
+      { name: "Final", percentage: 30, units: 1 }
+    ],
+    unitsData: {
+      "Assignments": [
+        { unitNo: 1, passing: 5, totalMarks: 10, weightage: 33.3 },
+        { unitNo: 2, passing: 5, totalMarks: 10, weightage: 33.3 },
+        { unitNo: 3, passing: 5, totalMarks: 10, weightage: 33.4 }
+      ],
+      "Quizzes": [
+        { unitNo: 1, passing: 5, totalMarks: 10, weightage: 33.3 },
+        { unitNo: 2, passing: 5, totalMarks: 10, weightage: 33.3 },
+        { unitNo: 3, passing: 5, totalMarks: 10, weightage: 33.4 }
+      ],
+      "Class Participation": [
+        { unitNo: 1, passing: 5, totalMarks: 10, weightage: 100 }
+      ],
+      "Class Project": [
+        { unitNo: 1, passing: 15, totalMarks: 30, weightage: 100 }
+      ],
+      "Presentation": [
+        { unitNo: 1, passing: 5, totalMarks: 10, weightage: 100 }
+      ],
+      "Mid Term": [
+        { unitNo: 1, passing: 15, totalMarks: 30, weightage: 100 }
+      ],
+      "Final": [
+        { unitNo: 1, passing: 20, totalMarks: 40, weightage: 100 }
+      ]
+    },
+    students: [
+      {
+        regNo: "FA22-BSCS-0012",
+        name: "Abdur Rehman Khalid",
+        marks: {
+          "Assignments-1": 8.5,
+          "Assignments-2": 9.0,
+          "Assignments-3": 7.5,
+          "Quizzes-1": 7.0,
+          "Quizzes-2": 8.5,
+          "Quizzes-3": 9.0,
+          "Class Participation-1": 9.0,
+          "Class Project-1": 26.5,
+          "Presentation-1": 8.0,
+          "Mid Term-1": 24.5,
+          "Final-1": 34.0
+        }
+      },
+      {
+        regNo: "FA22-BSCS-0045",
+        name: "Syeda Fatima Alvi",
+        marks: {
+          "Assignments-1": 9.0,
+          "Assignments-2": 8.0,
+          "Assignments-3": 8.5,
+          "Quizzes-1": 8.0,
+          "Quizzes-2": 7.5,
+          "Quizzes-3": 6.5,
+          "Class Participation-1": 8.0,
+          "Class Project-1": 25.0,
+          "Presentation-1": 9.0,
+          "Mid Term-1": 22.0,
+          "Final-1": 32.5
+        }
+      },
+      {
+        regNo: "FA22-BSCS-0089",
+        name: "Zayan Ahmed Khan",
+        marks: {
+          "Assignments-1": 7.5,
+          "Assignments-2": 7.0,
+          "Assignments-3": 8.0,
+          "Quizzes-1": 6.0,
+          "Quizzes-2": 5.0,
+          "Quizzes-3": 7.0,
+          "Class Participation-1": 7.0,
+          "Class Project-1": 22.0,
+          "Presentation-1": 7.5,
+          "Mid Term-1": 19.5,
+          "Final-1": 28.0
+        }
+      }
+    ]
+  },
+  {
+    id: "course-demo-2",
+    code: "AI-381",
+    title: "Artificial Intelligence",
+    departmentId: "computing",
+    departmentName: "Department of Computing and Technology",
+    programId: "bscs",
+    programName: "Bachelor of Science in Computer Science (BSCS)",
+    creditHours: 3,
+    categories: [
+      { name: "Assignments", percentage: 10, units: 2 },
+      { name: "Quizzes", percentage: 10, units: 2 },
+      { name: "Class Participation", percentage: 5, units: 1 },
+      { name: "Class Project", percentage: 20, units: 1 },
+      { name: "Presentation", percentage: 5, units: 1 },
+      { name: "Lab Project", percentage: 0, units: 0 },
+      { name: "Sessionals", percentage: 0, units: 0 },
+      { name: "Mid Term", percentage: 20, units: 1 },
+      { name: "Final", percentage: 30, units: 1 }
+    ],
+    unitsData: {
+      "Assignments": [
+        { unitNo: 1, passing: 5, totalMarks: 10, weightage: 50 },
+        { unitNo: 2, passing: 5, totalMarks: 10, weightage: 50 }
+      ],
+      "Quizzes": [
+        { unitNo: 1, passing: 5, totalMarks: 10, weightage: 50 },
+        { unitNo: 2, passing: 5, totalMarks: 10, weightage: 50 }
+      ],
+      "Class Participation": [
+        { unitNo: 1, passing: 5, totalMarks: 10, weightage: 100 }
+      ],
+      "Class Project": [
+        { unitNo: 1, passing: 15, totalMarks: 30, weightage: 100 }
+      ],
+      "Presentation": [
+        { unitNo: 1, passing: 5, totalMarks: 10, weightage: 100 }
+      ],
+      "Mid Term": [
+        { unitNo: 1, passing: 15, totalMarks: 30, weightage: 100 }
+      ],
+      "Final": [
+        { unitNo: 1, passing: 20, totalMarks: 40, weightage: 100 }
+      ]
+    },
+    students: [
+      {
+        regNo: "FA22-BSCS-0012",
+        name: "Abdur Rehman Khalid",
+        marks: {
+          "Assignments-1": 9.0,
+          "Assignments-2": 8.5,
+          "Quizzes-1": 8.0,
+          "Quizzes-2": 9.0,
+          "Class Participation-1": 9.0,
+          "Class Project-1": 27.0,
+          "Presentation-1": 8.5,
+          "Mid Term-1": 25.0,
+          "Final-1": 35.0
+        }
+      },
+      {
+        regNo: "FA22-BSCS-0104",
+        name: "Misha Farooq",
+        marks: {
+          "Assignments-1": 8.0,
+          "Assignments-2": 8.0,
+          "Quizzes-1": 7.0,
+          "Quizzes-2": 7.5,
+          "Class Participation-1": 8.0,
+          "Class Project-1": 24.0,
+          "Presentation-1": 8.0,
+          "Mid Term-1": 21.0,
+          "Final-1": 31.0
+        }
+      }
+    ]
+  }
+];
+
+const getLocalInstructorCourses = (): InstructorCourse[] => {
+  const saved = localStorage.getItem('IQRA_OBE_INSTRUCTOR_COURSES');
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.filter(c => c.id !== 'course-1' && c.id !== 'course-2');
+      }
+    } catch (e) {
+      // ignore & use default fallback
+    }
+  }
+  localStorage.setItem('IQRA_OBE_INSTRUCTOR_COURSES', JSON.stringify(DUMMY_PLAYGROUND_COURSES));
+  return DUMMY_PLAYGROUND_COURSES;
 };

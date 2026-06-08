@@ -27,32 +27,12 @@ import {
   Pencil,
   X
 } from 'lucide-react';
-import { BASE_URL } from '../services/apiService';
-import { Course, Department, Program } from '../types';
+import { apiService, BASE_URL } from '../services/apiService';
+import { Course, Department, Program, MarksCategory, UnitItem, CourseStudent, InstructorCourse } from '../types';
 
 interface InstructorDashboardProps {
   onLogout: () => void;
   instructorName?: string;
-}
-
-// Data structures for Instructor portal
-export interface MarksCategory {
-  name: string;
-  percentage: number;
-  units: number;
-}
-
-export interface UnitItem {
-  unitNo: number;
-  passing: number;
-  totalMarks: number;
-  weightage: number; // weight percentage of this item inside the category
-}
-
-export interface CourseStudent {
-  regNo: string;
-  name: string;
-  marks?: Record<string, number>; // key e.g. "Assignments-1", "Quizzes-3", etc.
 }
 
 // Prefix generator for dynamic column naming based on category
@@ -206,19 +186,7 @@ export function CellInput({
   );
 }
 
-export interface InstructorCourse {
-  id: string;
-  code: string;
-  title: string;
-  departmentId: string;
-  departmentName: string;
-  programId?: string;
-  programName?: string;
-  creditHours: number;
-  categories: MarksCategory[];
-  unitsData: Record<string, UnitItem[]>; // Key is category name (e.g., 'Quizzes')
-  students: CourseStudent[];
-}
+
 
 // Initial defaults to start entirely from scratch without pre-distributed dummy values.
 const INITIAL_CATEGORIES: MarksCategory[] = [
@@ -257,37 +225,61 @@ export const DEPARTMENT_PROGRAMS: Record<string, { id: string; name: string }[]>
 const DEFAULT_COURSES: InstructorCourse[] = [];
 
 export default function InstructorDashboard({ onLogout, instructorName = 'Prof. Dr. Jameel Ahmed' }: InstructorDashboardProps) {
-  // Local storage backed courses database (filtered on-the-fly to remove original template dummy courses)
-  const [courses, setCourses] = useState<InstructorCourse[]>(() => {
-    const saved = localStorage.getItem('IQRA_OBE_INSTRUCTOR_COURSES');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved) as InstructorCourse[];
-        // Automatically strip out predefined dummy courses
-        return parsed.filter(c => c.id !== 'course-1' && c.id !== 'course-2');
-      } catch (err) {
-        return [];
-      }
-    }
-    return [];
-  });
+  const [courses, setCourses] = useState<InstructorCourse[]>([]);
+  const [loading, setLoading] = useState(true);
 
   const [activeCourseId, setActiveCourseId] = useState<string>(() => {
-    // If the active course is one of the dummy ones, fallback to empty
     const saved = localStorage.getItem('IQRA_OBE_INSTRUCTOR_ACTIVE_ID');
     if (saved === 'course-1' || saved === 'course-2') return '';
     if (saved) return saved;
     return '';
   });
 
-  // Keep state synced to local storage
+  // Load from API on mount, fallback offline if server not reachable
   useEffect(() => {
-    localStorage.setItem('IQRA_OBE_INSTRUCTOR_COURSES', JSON.stringify(courses));
-  }, [courses]);
+    let active = true;
+    const fetchCourses = async () => {
+      try {
+        const data = await apiService.getInstructorCourses();
+        if (active) {
+          const filtered = data.filter(c => c.id !== 'course-1' && c.id !== 'course-2');
+          setCourses(filtered);
+          
+          // Make sure an active course is selected if none currently chosen
+          const savedActive = localStorage.getItem('IQRA_OBE_INSTRUCTOR_ACTIVE_ID');
+          if (!savedActive || savedActive === 'course-1' || savedActive === 'course-2') {
+            if (filtered.length > 0) {
+              setActiveCourseId(filtered[0].id);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load instructor courses", err);
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    };
+    fetchCourses();
+    return () => {
+      active = false;
+    };
+  }, []);
 
+  // Keep state synced to local storage & backend
   useEffect(() => {
     localStorage.setItem('IQRA_OBE_INSTRUCTOR_ACTIVE_ID', activeCourseId);
   }, [activeCourseId]);
+
+  useEffect(() => {
+    if (!loading) {
+      localStorage.setItem('IQRA_OBE_INSTRUCTOR_COURSES', JSON.stringify(courses));
+      apiService.saveInstructorCourses(courses).catch(err => {
+        console.warn("Failed to sync instructor courses to backend", err);
+      });
+    }
+  }, [courses, loading]);
 
   // UI state variables
   const [activeTab, setActiveTab] = useState<'weightage' | 'edit-items' | 'students' | 'grade' | 'marks-entry'>('weightage');
@@ -295,6 +287,24 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
   const [courseToDeleteId, setCourseToDeleteId] = useState<string | null>(null);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [activeModal, setActiveModal] = useState<'about' | 'help' | null>(null);
+  
+  // Header scroll and hover triggers for autohiding the quick toolbar
+  const [isScrolled, setIsScrolled] = useState(false);
+  const [isHeaderHovered, setIsHeaderHovered] = useState(false);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      if (window.scrollY > 30) {
+        setIsScrolled(true);
+      } else {
+        setIsScrolled(false);
+      }
+    };
+    window.addEventListener('scroll', handleScroll);
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+    };
+  }, []);
 
   // Close the desktop menu when the user clicks anywhere else
   useEffect(() => {
@@ -1170,11 +1180,27 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
     URL.revokeObjectURL(url);
   };
 
+  if (loading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center font-sans frosted-bg text-slate-800">
+        <div className="text-center space-y-4">
+          <div className="mx-auto w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-2xl animate-pulse shadow-lg">U</div>
+          <p className="text-sm font-sans font-semibold text-indigo-950 animate-pulse">Loading course data from backend API...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col font-sans frosted-bg text-slate-800">
       
       {/* CLASSIC DESKTOP WINDOWS-STYLE MENU BAR HEADER */}
-      <header id="instructor-portal-header" className="bg-[#f1f5f9] border-[#cbd5e1] border-b shrink-0 sticky top-0 z-40 select-none relative">
+      <header 
+        id="instructor-portal-header" 
+        onMouseEnter={() => setIsHeaderHovered(true)}
+        onMouseLeave={() => setIsHeaderHovered(false)}
+        className="bg-[#f1f5f9] border-[#cbd5e1] border-b shrink-0 sticky top-0 z-40 select-none relative"
+      >
         <div className="mx-auto flex flex-wrap items-center justify-between px-3 py-1.5 max-w-[1700px]">
           
           {/* Menu items list */}
@@ -1357,7 +1383,13 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
         </div>
 
         {/* Quick Toolbar (Desktop Icon Bar styled) */}
-        <div className="bg-[#f8fafc] border-t border-slate-200 px-6 py-2 flex flex-wrap items-center justify-between gap-4 select-none">
+        <div 
+          className={`bg-[#f8fafc] px-6 flex flex-wrap items-center justify-between gap-4 select-none transition-all duration-300 ease-in-out ${
+            (!isScrolled || isHeaderHovered)
+              ? 'max-h-[120px] opacity-100 py-2 border-t border-slate-200'
+              : 'max-h-0 opacity-0 py-0 border-t-0 overflow-hidden pointer-events-none'
+          }`}
+        >
           
           <div className="flex flex-wrap items-center gap-4">
             

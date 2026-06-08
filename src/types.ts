@@ -47,3 +47,36 @@ export interface OBEData {
   gas: GA[];
   courses: Course[];
 }
+
+export interface MarksCategory {
+  name: string;
+  percentage: number;
+  units: number;
+}
+
+export interface UnitItem {
+  unitNo: number;
+  passing: number;
+  totalMarks: number;
+  weightage: number;
+}
+
+export interface CourseStudent {
+  regNo: string;
+  name: string;
+  marks?: Record<string, number>;
+}
+
+export interface InstructorCourse {
+  id: string;
+  code: string;
+  title: string;
+  departmentId: string;
+  departmentName: string;
+  programId?: string;
+  programName?: string;
+  creditHours: number;
+  categories: MarksCategory[];
+  unitsData: Record<string, UnitItem[]>;
+  students: CourseStudent[];
+}
