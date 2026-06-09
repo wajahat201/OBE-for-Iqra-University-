@@ -267,14 +267,30 @@ const getHeaders = () => {
   };
 };
 
+const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeoutMs = 2000): Promise<Response> => {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    clearTimeout(id);
+    return response;
+  } catch (error) {
+    clearTimeout(id);
+    throw error;
+  }
+};
+
 export const apiService = {
   async getAllData(): Promise<OBEData> {
     try {
       const [depts, programs, gas, courses] = await Promise.all([
-        fetch(`${BASE_URL}/departments/`, { headers: getHeaders() }).then(res => res.json()),
-        fetch(`${BASE_URL}/programs/`, { headers: getHeaders() }).then(res => res.json()),
-        fetch(`${BASE_URL}/gas/`, { headers: getHeaders() }).then(res => res.json()),
-        fetch(`${BASE_URL}/courses/`, { headers: getHeaders() }).then(res => res.json()).catch(() => [])
+        fetchWithTimeout(`${BASE_URL}/departments/`, { headers: getHeaders() }).then(res => res.json()),
+        fetchWithTimeout(`${BASE_URL}/programs/`, { headers: getHeaders() }).then(res => res.json()),
+        fetchWithTimeout(`${BASE_URL}/gas/`, { headers: getHeaders() }).then(res => res.json()),
+        fetchWithTimeout(`${BASE_URL}/courses/`, { headers: getHeaders() }).then(res => res.json()).catch(() => [])
       ]);
 
       // If backend replies with malformed details or empty arrays, let's gracefully fall back to local storage
@@ -296,11 +312,11 @@ export const apiService = {
 
   async updateDepartment(id: string, data: Partial<Department>): Promise<Department> {
     try {
-      const response = await fetch(`${BASE_URL}/departments/${id}/`, {
+      const response = await fetchWithTimeout(`${BASE_URL}/departments/${id}/`, {
         method: 'PATCH',
         headers: getHeaders(),
         body: JSON.stringify(data),
-      });
+      }, 2000);
       if (!response.ok) throw new Error('Failed to update department on server');
       return response.json();
     } catch (err) {
@@ -320,11 +336,11 @@ export const apiService = {
 
   async updateProgram(id: string, data: Partial<Program>): Promise<Program> {
     try {
-      const response = await fetch(`${BASE_URL}/programs/${id}/`, {
+      const response = await fetchWithTimeout(`${BASE_URL}/programs/${id}/`, {
         method: 'PATCH',
         headers: getHeaders(),
         body: JSON.stringify(data),
-      });
+      }, 2000);
       if (!response.ok) throw new Error('Failed to update program on server');
       return response.json();
     } catch (err) {
@@ -345,11 +361,11 @@ export const apiService = {
   // Save Course Mapping (allows updating course to GA tick marks in local storage / server mock fallback!)
   async updateCourse(id: string, data: Partial<Course>): Promise<Course> {
     try {
-      const response = await fetch(`${BASE_URL}/courses/${id}/`, {
+      const response = await fetchWithTimeout(`${BASE_URL}/courses/${id}/`, {
         method: 'PATCH',
         headers: getHeaders(),
         body: JSON.stringify(data),
-      });
+      }, 2000);
       if (response.ok) return response.json();
     } catch (err) {
       // Squelch fetch error and update locally
@@ -385,9 +401,9 @@ export const apiService = {
 
   async getInstructorCourses(): Promise<InstructorCourse[]> {
     try {
-      const response = await fetch(`${BASE_URL}/instructor/courses/`, {
+      const response = await fetchWithTimeout(`${BASE_URL}/instructor/courses/`, {
         headers: getHeaders(),
-      });
+      }, 2000);
       if (!response.ok) throw new Error('Failed to fetch instructor courses');
       const data = await response.json();
       if (Array.isArray(data)) return data;
@@ -402,11 +418,11 @@ export const apiService = {
     // Save to local storage first for resilient fallback
     localStorage.setItem('IQRA_OBE_INSTRUCTOR_COURSES', JSON.stringify(courses));
     try {
-      const response = await fetch(`${BASE_URL}/instructor/courses/`, {
+      const response = await fetchWithTimeout(`${BASE_URL}/instructor/courses/`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ courses }),
-      });
+      }, 2500);
       if (response.ok) {
         const data = await response.json();
         if (Array.isArray(data)) return data;

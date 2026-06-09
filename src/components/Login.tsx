@@ -20,12 +20,17 @@ export default function Login({ onLogin }: LoginProps) {
     setError('');
     setLoading(true);
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1500);
+
     try {
       const res = await fetch(`${BASE_URL}/auth/login/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({ username, password }),
       });
+      clearTimeout(timeoutId);
 
       const data = await res.json();
 
@@ -42,6 +47,7 @@ export default function Login({ onLogin }: LoginProps) {
       onLogin(data.user.user_type as UserType, data.user.username);
 
     } catch (err) {
+      clearTimeout(timeoutId);
       setError('Connection to backend failed. Logging you into offline corporate sandbox demo...');
       setTimeout(() => {
         // Fallback login

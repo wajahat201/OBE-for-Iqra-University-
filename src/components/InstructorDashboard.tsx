@@ -222,6 +222,36 @@ export const DEPARTMENT_PROGRAMS: Record<string, { id: string; name: string }[]>
   ]
 };
 
+const distributeUnitWeightages = (n: number): number[] => {
+  if (n <= 0) return [];
+  if (n === 1) return [100];
+  const weights: number[] = [];
+  const share = parseFloat((100 / n).toFixed(1));
+  let sum = 0;
+  for (let i = 0; i < n - 1; i++) {
+    weights.push(share);
+    sum += share;
+  }
+  // The last one gets the exact remainder to sum to exactly 100
+  weights.push(parseFloat((100 - sum).toFixed(1)));
+  return weights;
+};
+
+const redistributeCategoryUnits = (catUnits: number, currentList: UnitItem[]): UnitItem[] => {
+  const result: UnitItem[] = [];
+  const weights = distributeUnitWeightages(catUnits);
+  for (let i = 0; i < catUnits; i++) {
+    const existing = currentList[i];
+    result.push({
+      unitNo: i + 1,
+      passing: existing ? existing.passing : 5,
+      totalMarks: existing ? existing.totalMarks : 10,
+      weightage: weights[i]
+    });
+  }
+  return result;
+};
+
 const DEFAULT_COURSES: InstructorCourse[] = [];
 
 export default function InstructorDashboard({ onLogout, instructorName = 'Prof. Dr. Jameel Ahmed' }: InstructorDashboardProps) {
@@ -287,24 +317,6 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
   const [courseToDeleteId, setCourseToDeleteId] = useState<string | null>(null);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [activeModal, setActiveModal] = useState<'about' | 'help' | null>(null);
-  
-  // Header scroll and hover triggers for autohiding the quick toolbar
-  const [isScrolled, setIsScrolled] = useState(false);
-  const [isHeaderHovered, setIsHeaderHovered] = useState(false);
-
-  useEffect(() => {
-    const handleScroll = () => {
-      if (window.scrollY > 30) {
-        setIsScrolled(true);
-      } else {
-        setIsScrolled(false);
-      }
-    };
-    window.addEventListener('scroll', handleScroll);
-    return () => {
-      window.removeEventListener('scroll', handleScroll);
-    };
-  }, []);
 
   // Close the desktop menu when the user clicks anywhere else
   useEffect(() => {
@@ -655,25 +667,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
         const updatedUnitsData = { ...c.unitsData };
         tempCategories.forEach(cat => {
           const currentList = updatedUnitsData[cat.name] || [];
-          if (cat.units > currentList.length) {
-            // Need to grow
-            const diff = cat.units - currentList.length;
-            const updatedList = [...currentList];
-            for (let i = 0; i < diff; i++) {
-              const uNo = updatedList.length + 1;
-              const defaultW = Math.round(100 / cat.units);
-              updatedList.push({
-                unitNo: uNo,
-                passing: 5,
-                totalMarks: 10,
-                weightage: defaultW
-              });
-            }
-            updatedUnitsData[cat.name] = updatedList;
-          } else if (cat.units < currentList.length) {
-            // Shrink
-            updatedUnitsData[cat.name] = currentList.slice(0, cat.units);
-          }
+          updatedUnitsData[cat.name] = redistributeCategoryUnits(cat.units, currentList);
         });
 
         return {
@@ -1075,6 +1069,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
       if (cat.percentage > 0) {
         if (cat.units > 0) {
           let catSum = 0;
+          let totalWeightSum = 0;
           const existingUnits = selectedCourse.unitsData[cat.name] || [];
           
           for (let u = 1; u <= cat.units; u++) {
@@ -1082,13 +1077,15 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
             const totalMarks = matchingUnit ? matchingUnit.totalMarks : 10;
             const weightage = matchingUnit ? matchingUnit.weightage : (100 / cat.units);
             
+            totalWeightSum += weightage;
             const mark = getStudentMark(student, cat.name, u, totalMarks);
             if (totalMarks > 0) {
               catSum += (mark / totalMarks) * weightage;
             }
           }
           
-          const categoryContribution = (catSum / 100) * cat.percentage;
+          const divisor = totalWeightSum > 0 ? totalWeightSum : 100;
+          const categoryContribution = (catSum / divisor) * cat.percentage;
           aggregate += categoryContribution;
         } else {
           aggregate += 0;
@@ -1197,8 +1194,6 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
       {/* CLASSIC DESKTOP WINDOWS-STYLE MENU BAR HEADER */}
       <header 
         id="instructor-portal-header" 
-        onMouseEnter={() => setIsHeaderHovered(true)}
-        onMouseLeave={() => setIsHeaderHovered(false)}
         className="bg-[#f1f5f9] border-[#cbd5e1] border-b shrink-0 sticky top-0 z-40 select-none relative"
       >
         <div className="mx-auto flex flex-wrap items-center justify-between px-3 py-1.5 max-w-[1700px]">
@@ -1374,9 +1369,12 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
           </div>
 
           {/* Quick status display */}
-          <div className="flex items-center gap-3">
+          <div className="flex flex-col items-end gap-0.5">
             <span className="text-[10px] text-slate-500 font-mono tracking-tight font-semibold hidden sm:inline">
               User: <strong className="text-indigo-950 font-extrabold">{selectedCourse ? selectedCourse.departmentName : 'Department of Computing and Technology'} Instructor</strong>
+            </span>
+            <span className="text-[9px] text-indigo-600 font-mono font-bold tracking-tight hidden md:inline bg-indigo-50 border border-indigo-100/50 px-2 py-0.5 rounded">
+              ResultMate Software Suite v4.6 Integration Sandbox
             </span>
           </div>
 
@@ -1384,11 +1382,8 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
 
         {/* Quick Toolbar (Desktop Icon Bar styled) */}
         <div 
-          className={`bg-[#f8fafc] px-6 flex flex-wrap items-center justify-between gap-4 select-none transition-all duration-300 ease-in-out ${
-            (!isScrolled || isHeaderHovered)
-              ? 'max-h-[120px] opacity-100 py-2 border-t border-slate-200'
-              : 'max-h-0 opacity-0 py-0 border-t-0 overflow-hidden pointer-events-none'
-          }`}
+          id="quick-toolbar-box"
+          className="bg-[#f8fafc] border-t border-slate-200 px-6 py-2 flex flex-wrap items-center justify-between gap-4 select-none relative z-30"
         >
           
           <div className="flex flex-wrap items-center gap-4">
@@ -1436,25 +1431,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
           </div>
 
           {/* Right side course lock / configurations */}
-          <div className="flex items-center gap-3">
-            {selectedCourse && (
-              <button
-                onClick={() => handleDeleteCourse(selectedCourse.id)}
-                className="text-rose-600 hover:text-rose-800 font-bold text-[10px] uppercase tracking-wider px-2 py-1 rounded hover:bg-rose-50 transition-colors"
-                title="Remove course specification"
-              >
-                Delete Specification
-              </button>
-            )}
-
-            <button
-              onClick={() => setIsAddingCourse(true)}
-              className="flex items-center gap-2 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold tracking-wider rounded-lg transition-all shadow-xs shrink-0 font-sans"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Add CourseTeaches</span>
-            </button>
-            
+          <div className="flex items-center">
             <button
               onClick={onLogout}
               className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-300 text-slate-700 hover:bg-slate-100 rounded-lg text-xs font-semibold transition-colors shadow-xs hover:border-slate-400 shrink-0 font-sans"
@@ -1674,6 +1651,17 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                 <span>Define Course Specification</span>
               </button>
 
+              {/* ASSESSMENT DESIGN PRINCIPLE (moved to sidebar) */}
+              <div className="bg-indigo-50/55 border border-indigo-100/80 rounded-xl p-4 text-xs text-slate-600 mt-4 shadow-2xs">
+                <h4 className="font-semibold text-slate-850 mb-1.5 flex items-center gap-1.5 font-sans">
+                  <Info className="w-4 h-4 text-indigo-600 shrink-0" />
+                  Assessment Design Principle
+                </h4>
+                <p className="text-[11px] leading-relaxed font-sans text-slate-600">
+                  Each individual unit item can store unique Passing Marks and Total Marks thresholds separate from one another. This allows you to construct modular, complex scorecards where student achievements are evaluated dynamically against course objectives.
+                </p>
+              </div>
+
             </div>
 
             {/* RIGHT COLUMN: MAIN OUTCOME ASSESSMENT INTERFACES */}
@@ -1699,10 +1687,9 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
 
                   {/* TAB PANES */}
                   <div className="bg-white/85 border border-slate-200/80 backdrop-blur-md rounded-2xl p-4 sm:p-6 shadow-md text-slate-800">
-              
-              {/* TAB 1: SET WEIGHTAGE */}
+                     {/* TAB 1: SET WEIGHTAGE */}
               {activeTab === 'weightage' && selectedCourse && (
-                <div className="space-y-6">
+                <div className="space-y-4">
                   
                   <div>
                     <h3 className="text-base font-bold text-slate-900 flex items-center gap-1.5">
@@ -1710,149 +1697,157 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                       Set Marks distribution Weightage
                     </h3>
                     <p className="text-xs text-slate-600 mt-1">
-                      Set total distribution percentages for each criteria. Total must sum up to exactly <strong className="text-indigo-950">100.00%</strong>. Use the control below the grid to make adjustments.
+                      Set total distribution percentages for each criteria. Total must sum up to exactly <strong className="text-indigo-950">100.00%</strong>. Use the control on the right to make real-time adjustments.
                     </p>
                   </div>
 
-                  {/* Weightage Data Grid */}
-                  <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-xs">
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left border-collapse text-xs">
-                        <thead>
-                          <tr className="bg-slate-50 border-b border-slate-200 text-slate-700 font-bold">
-                            <th className="py-2.5 px-4 w-12 text-center">Sel</th>
-                            <th className="py-2.5 px-4">Marks Title</th>
-                            <th className="py-2.5 px-4 text-center">Percentage</th>
-                            <th className="py-2.5 px-4 text-center">No of Units</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-200 font-mono text-slate-700">
-                          {tempCategories.map((item, idx) => (
-                            <tr
-                              key={item.name}
-                              onClick={() => setSelectedWeightIndex(idx)}
-                              className={`cursor-pointer transition-colors ${
-                                selectedWeightIndex === idx
-                                  ? 'bg-indigo-50/70 text-indigo-950 font-bold border-l-4 border-l-indigo-600'
-                                  : 'hover:bg-slate-50'
-                              }`}
-                            >
-                              <td className="py-3 px-4 text-center">
-                                <div className="flex items-center justify-center">
-                                  {selectedWeightIndex === idx ? (
-                                    <span className="text-indigo-600 text-[10px]">▶</span>
-                                  ) : (
-                                    <span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="py-3 px-4 font-sans text-slate-800">
-                                {item.name}
-                              </td>
-                              <td className="py-3 px-4 text-center font-bold text-indigo-600">
-                                {item.percentage}%
-                              </td>
-                              <td className="py-3 px-4 text-center text-slate-600">
-                                {item.units}
-                              </td>
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+                    {/* Weightage Data Grid left column */}
+                    <div className="lg:col-span-7 border border-slate-200 rounded-xl overflow-hidden bg-white shadow-xs">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-slate-50 border-b border-slate-200 text-slate-700 font-bold">
+                              <th className="py-2.5 px-4 w-12 text-center">Sel</th>
+                              <th className="py-2.5 px-4">Marks Title</th>
+                              <th className="py-2.5 px-4 text-center border-l border-slate-200/60 bg-indigo-50/10">Percentage</th>
+                              <th className="py-2.5 px-4 text-center border-l border-slate-200/60">No of Units</th>
                             </tr>
-                          ))}
-                        </tbody>
-                        <tfoot>
-                          <tr className="bg-slate-50 border-t border-slate-200 text-xs font-semibold text-slate-800">
-                            <td colSpan={2} className="py-3 px-4 text-right pr-12 font-sans text-slate-600">
-                              Total Distribution Percentage:
-                            </td>
-                            <td className="py-3 px-4 text-center">
-                              <span className={`px-2.5 py-1 rounded font-mono text-xs font-bold ${
-                                currentTotalWeight === 100
-                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-300'
-                                  : 'bg-rose-50 text-rose-700 border border-rose-300 animate-pulse'
-                              }`}>
-                                {currentTotalWeight.toFixed(2)}%
-                              </span>
-                            </td>
-                            <td></td>
-                          </tr>
-                        </tfoot>
-                      </table>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200 font-mono text-slate-755">
+                            {tempCategories.map((item, idx) => (
+                              <tr
+                                key={item.name}
+                                onClick={() => setSelectedWeightIndex(idx)}
+                                className={`cursor-pointer transition-colors ${
+                                  selectedWeightIndex === idx
+                                    ? 'bg-indigo-50/50 text-indigo-950 font-bold border-l-4 border-l-indigo-600'
+                                    : 'hover:bg-slate-50'
+                                }`}
+                              >
+                                <td className="py-2.5 px-4 text-center">
+                                  <div className="flex items-center justify-center">
+                                    {selectedWeightIndex === idx ? (
+                                      <span className="text-indigo-600 text-[10px]">▶</span>
+                                    ) : (
+                                      <span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-4 font-sans text-slate-800">
+                                  {item.name}
+                                </td>
+                                <td className="py-2.5 px-4 text-center font-bold text-indigo-600 border-l border-slate-200/60 bg-indigo-50/10">
+                                  {item.percentage}%
+                                </td>
+                                <td className="py-2.5 px-4 text-center text-slate-650 border-l border-slate-200/60">
+                                  {item.units}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr className="bg-slate-50 border-t border-slate-200 text-xs font-semibold text-slate-800">
+                              <td colSpan={2} className="py-2.5 px-4 text-right pr-4 font-sans text-slate-550 border-r border-slate-150">
+                                Total Weightage:
+                              </td>
+                              <td className="py-2.5 px-4 text-center bg-white border-r border-slate-150">
+                                <span className={`px-2 py-0.5 rounded font-mono text-xs font-extrabold ${
+                                  currentTotalWeight === 100
+                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-300'
+                                    : 'bg-rose-50 text-rose-700 border border-rose-300 animate-pulse'
+                                }`}>
+                                  {currentTotalWeight.toFixed(2)}%
+                                </span>
+                              </td>
+                              <td></td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* Row Editor Card right column */}
+                    <div className="lg:col-span-5">
+                      {tempCategories[selectedWeightIndex] ? (
+                        <div className="bg-[#f8fafc] border border-slate-200 rounded-xl p-4 space-y-4">
+                          <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                            <span className="text-[10px] font-mono text-indigo-600 uppercase tracking-widest font-extrabold">
+                              Active Component Editor
+                            </span>
+                            <span className="text-xs font-bold text-indigo-950 bg-indigo-50 border border-indigo-100 px-3 py-1 rounded-lg">
+                              {tempCategories[selectedWeightIndex].name}
+                            </span>
+                          </div>
+
+                          <div className="space-y-3">
+                            <div>
+                              <label className="block text-[10px] uppercase tracking-wider text-slate-600 mb-1 font-bold font-mono">
+                                Category Percentage (%)
+                              </label>
+                              <input
+                                type="number"
+                                min="0"
+                                max="100"
+                                value={editWeightPercent}
+                                onChange={(e) => handleWeightPercentChange(e.target.value)}
+                                className="bg-white text-slate-950 text-xs px-3 py-1.5 rounded-lg border border-slate-300 focus:ring-1 focus:ring-indigo-500 outline-none w-full font-mono font-bold"
+                              />
+                              <p className="text-[10px] text-slate-500 mt-1 font-sans">
+                                Percentage weight of student's aggregate.
+                              </p>
+                            </div>
+
+                            <div>
+                              <label className="block text-[10px] uppercase tracking-wider text-slate-600 mb-1 font-bold font-mono">
+                                Number of Units
+                              </label>
+                              <input
+                                type="number"
+                                min="0"
+                                max="20"
+                                value={editWeightUnits}
+                                onChange={(e) => handleWeightUnitsChange(e.target.value)}
+                                className="bg-white text-slate-950 text-xs px-3 py-1.5 rounded-lg border border-slate-300 focus:ring-1 focus:ring-indigo-500 outline-none w-full font-mono font-bold"
+                              />
+                              <p className="text-[10px] text-slate-500 mt-1 font-sans">
+                                Number of assessment units (e.g. 3 quizzes).
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex justify-end pt-2">
+                            <button
+                              onClick={handleUpdateCategorySingle}
+                              className="w-full px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-xs transition-colors cursor-pointer text-center"
+                            >
+                              Update Highlighted Row
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="bg-[#f8fafc] border border-dashed border-slate-300 rounded-xl p-6 text-center text-slate-450 text-xs">
+                          Select a row to adjust values
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  {/* Row Editor Card */}
-                  {tempCategories[selectedWeightIndex] && (
-                    <div className="bg-[#f8fafc] border border-slate-200 rounded-xl p-5">
-                      <div className="flex items-center justify-between border-b border-slate-200 pb-2 mb-4">
-                        <span className="text-xs font-mono text-indigo-600 uppercase tracking-widest font-bold">
-                          Active Component Editor
-                        </span>
-                        <span className="text-xs font-bold text-indigo-950 bg-indigo-50 border border-indigo-100 px-3 py-1 rounded-lg">
-                          {tempCategories[selectedWeightIndex].name}
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-[11px] uppercase tracking-wider text-slate-600 mb-1 font-semibold font-mono">
-                            Category Percentage (%)
-                          </label>
-                          <input
-                            type="number"
-                            min="0"
-                            max="100"
-                            value={editWeightPercent}
-                            onChange={(e) => handleWeightPercentChange(e.target.value)}
-                            className="bg-white text-slate-950 text-xs px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-150 outline-none w-full font-mono"
-                          />
-                          <p className="text-[10px] text-slate-500 mt-1 font-sans">
-                            Portion of the student's final aggregate allocated to this criteria.
-                          </p>
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] uppercase tracking-wider text-slate-600 mb-1 font-semibold font-mono">
-                            Number of Units
-                          </label>
-                          <input
-                            type="number"
-                            min="0"
-                            max="20"
-                            value={editWeightUnits}
-                            onChange={(e) => handleWeightUnitsChange(e.target.value)}
-                            className="bg-white text-slate-950 text-xs px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-150 outline-none w-full font-mono"
-                          />
-                          <p className="text-[10px] text-slate-500 mt-1 font-sans">
-                            Number of sessions (e.g. 5 Assignments or 6 Quizzes). Adjust to generate rows.
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-slate-200">
-                        <button
-                          onClick={handleUpdateCategorySingle}
-                          className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer"
-                        >
-                          Update Row Values
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
                   {/* Submission and reset actions */}
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-4 border-t border-slate-200">
-                    <p className="text-xs text-slate-500">
-                      Changes made above take immediate effect upon selecting "Ok".
+                  <div className="flex items-center justify-between gap-4 pt-4 border-t border-slate-200">
+                    <p className="text-[11px] text-slate-500 font-sans">
+                      Changes above require selecting <strong className="font-bold">Ok</strong> to finalize.
                     </p>
                     <div className="flex items-center gap-2">
                       <button
                         onClick={handleResetWeightage}
-                        className="px-5 py-2 hover:bg-slate-100 border border-slate-300 text-slate-700 text-xs font-semibold rounded-lg transition-colors"
+                        className="px-4 py-1.5 hover:bg-slate-100 border border-slate-300 text-slate-700 text-xs font-semibold rounded-lg transition-colors"
                       >
                         Cancel
                       </button>
                       <button
                         onClick={handleSaveAllWeightage}
-                        className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-md flex items-center gap-1.5 transition-colors"
+                        className="px-5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-md flex items-center gap-1.5 transition-colors"
                       >
                         <Save className="w-3.5 h-3.5" />
                         Ok
@@ -1913,13 +1908,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                     })}
                   </div>
 
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs text-slate-600">
-                    <h4 className="font-semibold text-slate-850 mb-1.5 flex items-center gap-1.5 font-sans">
-                      <Info className="w-4 h-4 text-indigo-600 shrink-0" />
-                      Assessment Design Principle
-                    </h4>
-                    Each individual unit item can store unique Passing Marks and Total Marks thresholds separate from one another. This allows you to construct modular, complex scorecards where student achievements are evaluated dynamically against course objectives.
-                  </div>
+                  {/* Note: Assessment Design Principle is persistently mounted at the base of the left sidebar list context. */}
 
                 </div>
               )}
@@ -2108,16 +2097,17 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
 
                     {/* ENROLLED MATRIX */}
                     <div className="lg:col-span-8 bg-white rounded-xl border border-slate-205 overflow-hidden shadow-xs">
-                      <table className="w-full text-left text-xs font-sans">
-                        <thead>
-                          <tr className="bg-slate-50 text-slate-705 border-b border-slate-200 font-bold">
-                            <th className="py-2.5 px-4 w-12 text-center">S.#</th>
-                            <th className="py-2.5 px-4 font-sans">Registration No.</th>
-                            <th className="py-2.5 px-4 font-sans">Student Name</th>
-                            <th className="py-2.5 px-4 text-center w-28 font-sans">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-200 font-mono text-slate-700">
+                      <div className="overflow-auto max-h-[380px]">
+                        <table className="w-full text-left text-xs font-sans relative">
+                          <thead className="sticky top-0 bg-slate-50 z-20 shadow-xs border-b border-slate-200">
+                            <tr className="bg-slate-50 text-slate-705 font-bold">
+                              <th className="py-2.5 px-4 w-12 text-center sticky top-0 bg-slate-50 z-20">S.#</th>
+                              <th className="py-2.5 px-4 font-sans sticky top-0 bg-slate-50 z-20">Registration No.</th>
+                              <th className="py-2.5 px-4 font-sans sticky top-0 bg-slate-50 z-20">Student Name</th>
+                              <th className="py-2.5 px-4 text-center w-28 font-sans sticky top-0 bg-slate-50 z-20">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200 font-mono text-slate-700">
                           {selectedCourse.students.map((student, index) => {
                             const isEditing = editingStudentReg === student.regNo;
                             return (
@@ -2212,11 +2202,10 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                         </tbody>
                       </table>
                     </div>
-
                   </div>
-
                 </div>
-              )}
+              </div>
+            )}
 
               {/* TAB 4: GRADE SHEETS */}
               {activeTab === 'grade' && selectedCourse && (
@@ -2242,19 +2231,19 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                   </div>
 
                   <div className="bg-white rounded-xl border border-slate-205 overflow-hidden shadow-xs">
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left text-xs border-collapse font-sans">
-                        <thead>
-                          <tr className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
-                            <th className="py-2.5 px-4 w-12 text-center">S.#</th>
-                            <th className="py-2.5 px-4">Registration No.</th>
-                            <th className="py-2.5 px-4">Student Name</th>
+                    <div className="overflow-auto max-h-[380px]">
+                      <table className="w-full text-left text-xs border-collapse font-sans relative">
+                        <thead className="sticky top-0 bg-slate-50 z-20 shadow-xs border-b border-slate-200">
+                          <tr className="bg-slate-50 text-slate-700 font-bold">
+                            <th className="py-2.5 px-4 w-12 text-center sticky top-0 bg-slate-50 z-20">S.#</th>
+                            <th className="py-2.5 px-4 sticky top-0 bg-slate-50 z-20">Registration No.</th>
+                            <th className="py-2.5 px-4 sticky top-0 bg-slate-50 z-20">Student Name</th>
                             {selectedCourse.categories.filter(c => c.percentage > 0).map(cat => (
-                              <th key={cat.name} className="py-2.5 px-4 text-center font-mono">
-                                {cat.name} <span className="text-[10px] text-slate-500 block">({cat.percentage}%)</span>
+                              <th key={cat.name} className="py-2.5 px-4 text-center font-mono sticky top-0 bg-slate-50 z-20">
+                                {cat.name} <span className="text-[10px] text-slate-500 block font-normal">({cat.percentage}%)</span>
                               </th>
                             ))}
-                            <th className="py-2.5 px-4 text-center font-bold text-indigo-650 font-sans">Total (100)</th>
+                            <th className="py-2.5 px-4 text-center font-bold text-indigo-650 font-sans sticky top-0 bg-slate-50 z-20">Total (100)</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-200 font-mono text-slate-700">
@@ -2264,6 +2253,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                             let aggregate = 0;
                             const catGrades = activeCats.map(cat => {
                               let catSum = 0;
+                              let totalWeightSum = 0;
                               const existingUnits = selectedCourse.unitsData[cat.name] || [];
                               if (cat.units > 0) {
                                 for (let u = 1; u <= cat.units; u++) {
@@ -2271,13 +2261,15 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                                   const totalMarks = matchingUnit ? matchingUnit.totalMarks : 10;
                                   const weightage = matchingUnit ? matchingUnit.weightage : (100 / cat.units);
                                   
+                                  totalWeightSum += weightage;
                                   const mark = getStudentMark(std, cat.name, u, totalMarks);
                                   if (totalMarks > 0) {
                                     catSum += (mark / totalMarks) * weightage;
                                   }
                                 }
                               }
-                              const categoryContribution = (catSum / 100) * cat.percentage;
+                              const divisor = totalWeightSum > 0 ? totalWeightSum : 100;
+                              const categoryContribution = (catSum / divisor) * cat.percentage;
                               aggregate += categoryContribution;
                               return parseFloat(categoryContribution.toFixed(1));
                             });
@@ -2344,53 +2336,46 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                     </div>
                   </div>
 
-                  {/* ROYAL-BLUE RETRO SYSTEM BANNER */}
-                  <div className="bg-[#13426e] border border-[#0d2a4a] text-white p-2 rounded-xl shadow-md font-sans">
-                    <div className="grid grid-cols-1 md:grid-cols-12 border border-blue-200/20 text-[11px] font-bold overflow-hidden rounded-lg">
-                      {/* Row 1 */}
-                      <div className="md:col-span-2 bg-[#0c2e50] p-2 text-blue-200/90 border-r border-b border-blue-200/10">Course Code</div>
-                      <div className="md:col-span-2 bg-white text-slate-900 p-2 border-r border-b border-blue-200/10 font-mono text-xs uppercase">{selectedCourse.code}</div>
-                      
-                      <div className="md:col-span-2 bg-[#0c2e50] p-2 text-blue-200/90 border-r border-b border-blue-200/10">Course Name</div>
-                      <div className="md:col-span-4 bg-white text-slate-900 p-2 border-r border-b border-blue-200/10 text-xs font-sans font-semibold">{selectedCourse.title}</div>
-                      
-                      <div className="md:col-span-1 bg-[#0c2e50] p-2 text-blue-200/90 border-r border-b border-blue-200/10">Semester</div>
-                      <div className="md:col-span-1 bg-white text-slate-900 p-2 border-b border-blue-200/10 font-mono text-xs uppercase">Sp-2026</div>
-
-                      {/* Row 2 */}
-                      <div className="md:col-span-2 bg-[#0c2e50] p-2 text-blue-200/90 border-r border-blue-200/10">Credit Hours</div>
-                      <div className="md:col-span-2 bg-white text-slate-900 p-2 border-r border-blue-200/10 font-mono text-xs">{selectedCourse.creditHours}-0-{selectedCourse.creditHours}</div>
-                      
-                      <div className="md:col-span-2 bg-[#0c2e50] p-2 text-blue-200/90 border-r border-blue-200/10">Instructor</div>
-                      <div className="md:col-span-4 bg-white text-slate-900 p-2 border-r border-blue-200/10 text-xs font-sans font-semibold">{instructorName}</div>
-                      
-                      <div className="md:col-span-1 bg-[#0c2e50] p-2 text-blue-200/90 border-r border-blue-200/10">Section</div>
-                      <div className="md:col-span-1 bg-white text-slate-900 p-2 text-xs font-bold uppercase text-slate-700">All</div>
+                  {/* ROYAL-BLUE MINI INFO BAR BANNER */}
+                  <div className="bg-[#0f2d4e] text-slate-100 p-3 rounded-xl border border-slate-700/30 shadow-xs flex flex-wrap items-center justify-between gap-x-6 gap-y-2 text-xs font-sans">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-blue-300 font-mono font-bold tracking-wide uppercase">Course:</span>
+                      <span className="font-mono text-[11px] font-extrabold text-white bg-blue-900 border border-blue-800/80 px-2 py-0.5 rounded leading-none">{selectedCourse.code}</span>
+                      <span className="font-bold text-white text-xs">{selectedCourse.title}</span>
+                    </div>
+                    <div className="flex items-center gap-4 text-[11px] font-mono text-slate-200/90">
+                      <div>Cr. Hrs: <strong className="text-white">{selectedCourse.creditHours}-0-{selectedCourse.creditHours}</strong></div>
+                      <div className="h-3 w-px bg-slate-500/30"></div>
+                      <div>Instructor: <strong className="text-white font-sans font-semibold">{instructorName}</strong></div>
+                      <div className="h-3 w-px bg-slate-500/30"></div>
+                      <div>Semester: <strong className="text-white font-bold">Spring-26</strong></div>
+                      <div className="h-3 w-px bg-slate-500/30"></div>
+                      <div>Section: <strong className="text-white font-bold">All</strong></div>
                     </div>
                   </div>
 
                   {/* SPREADSHEET LEDGER TABLE */}
-                  <div className="bg-white rounded-xl border border-slate-205 overflow-hidden shadow-sm">
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left text-xs border-collapse font-sans min-w-[800px]">
-                        <thead>
+                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+                    <div className="overflow-auto max-h-[380px]">
+                      <table className="w-full text-left text-xs border-collapse font-sans min-w-[800px] relative">
+                        <thead className="sticky top-0 bg-slate-100 z-20 shadow-xs">
                           <tr className="bg-slate-100 text-slate-700 font-bold border-b border-slate-300">
-                            <th className="py-2.5 px-3 w-12 text-center border-r border-slate-200 bg-slate-150/50">S.#</th>
-                            <th className="py-2.5 px-3 w-40 border-r border-slate-200 font-sans">Roll No</th>
-                            <th className="py-2.5 px-3 min-w-[200px] border-r border-slate-200">Student Name</th>
+                            <th className="py-2.5 px-3 w-12 text-center border-r border-slate-200 bg-slate-150/50 sticky top-0 z-20">S.#</th>
+                            <th className="py-2.5 px-3 w-40 border-r border-slate-200 font-sans sticky top-0 bg-slate-100 z-20">Roll No</th>
+                            <th className="py-2.5 px-3 min-w-[200px] border-r border-slate-200 sticky top-0 bg-slate-100 z-20">Student Name</th>
                             
                             {tableColumns.map((col, index) => (
-                              <th key={`head-${col.categoryName}-${col.unitNo}-${index}`} className="py-2 px-1 text-center border-r border-slate-200 font-mono w-16 bg-slate-50">
+                              <th key={`head-${col.categoryName}-${col.unitNo}-${index}`} className="py-2 px-1 text-center border-r border-slate-200 font-mono w-16 bg-[#f1f5f9] sticky top-0 z-20">
                                 <span className="block text-indigo-950 font-bold">{col.label}</span>
                                 <span className="block text-[8px] text-slate-450 font-normal mt-0.5">Max {col.totalMarks}</span>
                               </th>
                             ))}
                             
-                            <th className="py-2.5 px-3 text-center border-r border-slate-200 font-bold text-slate-800 bg-indigo-50/20 w-24">TMarks</th>
-                            <th className="py-2.5 px-3 text-center font-bold text-indigo-755 bg-indigo-50/40 w-20">Grade</th>
+                            <th className="py-2.5 px-3 text-center border-r border-slate-200 font-bold text-slate-800 bg-indigo-50/20 w-24 sticky top-0 z-20">TMarks</th>
+                            <th className="py-2.5 px-3 text-center font-bold text-indigo-755 bg-indigo-50/40 w-20 sticky top-0 z-20">Grade</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-200 font-mono text-slate-705">
+                        <tbody className="divide-y divide-slate-250 font-mono text-slate-705">
                           {selectedCourse.students.map((std, idx) => {
                             const tMarks = calculateStudentCourseTotal(std);
                             const grade = getLetterGrade(tMarks);
@@ -2514,7 +2499,6 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
       {/* FOOTER METADATA */}
       <footer className="bg-white border-t border-slate-200 py-6 text-center text-xs text-slate-500 mt-auto">
         <p>&copy; Iqra University Outcome Based Education (OBE) Management System. All rights reserved.</p>
-        <p className="text-[10px] text-slate-400 mt-1 font-mono font-semibold">ResultMate Software Suite v4.6 Integration Sandbox</p>
       </footer>
 
 
