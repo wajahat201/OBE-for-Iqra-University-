@@ -14,7 +14,7 @@ export default function ComingSoon({ userType, onLogout }: ComingSoonProps) {
         animate={{ opacity: 1, y: 0 }}
         className="bg-white/40 backdrop-blur-xl border border-white/50 p-8 rounded-[32px] shadow-xl max-w-md w-full text-center"
       >
-        <div className="mx-auto w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-2xl shadow-lg mb-4">U</div>
+        <div className="mx-auto w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-2xl shadow-lg mb-4">IU</div>
         <h1 className="text-3xl font-display font-medium text-slate-800 mb-4">Coming Soon</h1>
         <p className="text-slate-600 mb-8 font-sans">
           The dashboard for <span className="font-semibold text-indigo-950">{userType}</span> is currently under development.

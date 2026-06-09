@@ -75,7 +75,7 @@ export default function Login({ onLogin }: LoginProps) {
         className="bg-white/40 backdrop-blur-xl border border-white/50 p-8 md:p-12 rounded-[32px] shadow-xl max-w-lg w-full"
       >
         <div className="mb-10 text-center">
-          <div className="mx-auto w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-2xl shadow-lg mb-4">U</div>
+          <div className="mx-auto w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-2xl shadow-lg mb-4">IU</div>
           <h1 className="text-4xl font-display font-bold text-indigo-950 tracking-tight mb-2">Iqra University OBE</h1>
           <p className="text-indigo-800/80 font-sans text-sm font-medium">University Outcome Based Education Manager</p>
         </div>

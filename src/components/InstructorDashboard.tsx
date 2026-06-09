@@ -13,6 +13,7 @@ import {
   ChevronRight, 
   ChevronLeft, 
   ArrowLeft,
+  ChevronDown,
   LogOut, 
   BookOpenCheck,
   Building,
@@ -25,7 +26,12 @@ import {
   Info,
   Upload,
   Pencil,
-  X
+  X,
+  Award,
+  FileText,
+  Percent,
+  Edit3,
+  Trash
 } from 'lucide-react';
 import { apiService, BASE_URL } from '../services/apiService';
 import { Course, Department, Program, MarksCategory, UnitItem, CourseStudent, InstructorCourse } from '../types';
@@ -265,6 +271,9 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
     return '';
   });
 
+  const [selectedObeAssKey, setSelectedObeAssKey] = useState<string>('');
+  const lastActiveCourseIdRef = useRef<string>('');
+
   // Load from API on mount, fallback offline if server not reachable
   useEffect(() => {
     let active = true;
@@ -300,7 +309,19 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
   // Keep state synced to local storage & backend
   useEffect(() => {
     localStorage.setItem('IQRA_OBE_INSTRUCTOR_ACTIVE_ID', activeCourseId);
-  }, [activeCourseId]);
+    if (!activeCourseId) return;
+
+    if (lastActiveCourseIdRef.current !== activeCourseId || !selectedObeAssKey) {
+      lastActiveCourseIdRef.current = activeCourseId;
+      const activeC = courses.find(c => c.id === activeCourseId);
+      if (activeC && activeC.categories.length > 0) {
+        const firstCat = activeC.categories[0];
+        if (firstCat && firstCat.units > 0) {
+          setSelectedObeAssKey(`${firstCat.name}:::1`);
+        }
+      }
+    }
+  }, [activeCourseId, courses, selectedObeAssKey]);
 
   useEffect(() => {
     if (!loading) {
@@ -312,7 +333,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
   }, [courses, loading]);
 
   // UI state variables
-  const [activeTab, setActiveTab] = useState<'weightage' | 'edit-items' | 'students' | 'grade' | 'marks-entry'>('weightage');
+  const [activeTab, setActiveTab] = useState<'weightage' | 'edit-items' | 'students' | 'grade' | 'marks-entry' | 'obe'>('weightage');
   const [isAddingCourse, setIsAddingCourse] = useState(false);
   const [courseToDeleteId, setCourseToDeleteId] = useState<string | null>(null);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
@@ -546,6 +567,126 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
   const [parsedStudents, setParsedStudents] = useState<CourseStudent[]>([]);
   const [fileName, setFileName] = useState('');
   const [isDragging, setIsDragging] = useState(false);
+
+  // --- Sub-modules: OBE Setup States ---
+  const [obeSubTab, setObeSubTab] = useState<'questions' | 'marks' | 'reports'>('questions');
+  const [qName, setQName] = useState('');
+  const [qMaxMarks, setQMaxMarks] = useState<string>('10');
+  const [qClos, setQClos] = useState<string[]>([]);
+  const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
+
+  const resetObeForm = () => {
+    setQName('');
+    setQMaxMarks('10');
+    setQClos([]);
+    setEditingQuestionId(null);
+  };
+
+  const handleSaveObeQuestion = () => {
+    if (!selectedCourse) return;
+    if (!qName.trim()) {
+      alert("Please enter a question name (e.g. Question 1).");
+      return;
+    }
+    const maxM = parseFloat(qMaxMarks);
+    if (isNaN(maxM) || maxM <= 0) {
+      alert("Max marks must be greater than 0.");
+      return;
+    }
+    if (qClos.length === 0) {
+      alert("Please map this question to at least one CLO target.");
+      return;
+    }
+    if (!selectedObeAssKey) {
+      alert("Please select an assessment component first.");
+      return;
+    }
+
+    const [catName, unitNoStr] = selectedObeAssKey.split(':::');
+    const uNo = parseInt(unitNoStr, 10);
+
+    const updatedQuestions = [...(selectedCourse.obeQuestions || [])];
+    if (editingQuestionId) {
+      const idx = updatedQuestions.findIndex(q => q.id === editingQuestionId);
+      if (idx !== -1) {
+        updatedQuestions[idx] = {
+          ...updatedQuestions[idx],
+          questionName: qName.trim(),
+          maxMarks: maxM,
+          mappedCLOs: qClos
+        };
+      }
+    } else {
+      const newQ = {
+        id: `q-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        categoryName: catName,
+        unitNo: uNo,
+        questionName: qName.trim(),
+        maxMarks: maxM,
+        mappedCLOs: qClos
+      };
+      updatedQuestions.push(newQ);
+    }
+
+    setCourses(prev => prev.map(c => {
+      if (c.id === selectedCourse.id) {
+        return {
+          ...c,
+          obeQuestions: updatedQuestions
+        };
+      }
+      return c;
+    }));
+
+    resetObeForm();
+  };
+
+  const handleDeleteObeQuestion = (qId: string) => {
+    if (!selectedCourse) return;
+    if (!confirm("Are you sure you want to delete this OBE question? Student marks entered for this question will also be removed permanently.")) return;
+
+    const updatedQuestions = (selectedCourse.obeQuestions || []).filter(q => q.id !== qId);
+    
+    const updatedMarks = { ...(selectedCourse.obeMarks || {}) };
+    Object.keys(updatedMarks).forEach(reg => {
+      const stdMarks = { ...updatedMarks[reg] };
+      delete stdMarks[qId];
+      updatedMarks[reg] = stdMarks;
+    });
+
+    setCourses(prev => prev.map(c => {
+      if (c.id === selectedCourse.id) {
+        return {
+          ...c,
+          obeQuestions: updatedQuestions,
+          obeMarks: updatedMarks
+        };
+      }
+      return c;
+    }));
+  };
+
+  const handleSaveObeMark = (regNo: string, qId: string, value: number) => {
+    if (!selectedCourse) return;
+    
+    setCourses(prev => prev.map(c => {
+      if (c.id === selectedCourse.id) {
+        const copyMarks = { ...(c.obeMarks || {}) };
+        if (!copyMarks[regNo]) {
+          copyMarks[regNo] = {};
+        }
+        copyMarks[regNo] = {
+          ...copyMarks[regNo],
+          [qId]: value
+        };
+        return {
+          ...c,
+          obeMarks: copyMarks
+        };
+      }
+      return c;
+    }));
+  };
 
   // Course management action callbacks
   const handleAddNewCourse = (e: React.FormEvent) => {
@@ -1181,12 +1322,20 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
     return (
       <div className="min-h-screen flex flex-col items-center justify-center font-sans frosted-bg text-slate-800">
         <div className="text-center space-y-4">
-          <div className="mx-auto w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-2xl animate-pulse shadow-lg">U</div>
+          <div className="mx-auto w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-2xl animate-pulse shadow-lg">IU</div>
           <p className="text-sm font-sans font-semibold text-indigo-950 animate-pulse">Loading course data from backend API...</p>
         </div>
       </div>
     );
   }
+
+  const getNavbarItemClass = (isActive: boolean) => {
+    return `px-3.5 py-1.5 text-xs font-sans font-bold rounded-lg cursor-pointer transition-all flex items-center gap-1.5 border ${
+      isActive 
+        ? 'bg-indigo-600 text-white font-black shadow-sm border-indigo-600 hover:bg-indigo-700 hover:text-white' 
+        : 'bg-slate-100/80 hover:bg-indigo-50 hover:text-indigo-900 hover:border-indigo-200/50 text-slate-700 border-slate-200/60'
+    }`;
+  };
 
   return (
     <div className="min-h-screen flex flex-col font-sans frosted-bg text-slate-800">
@@ -1199,12 +1348,12 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
         <div className="mx-auto flex flex-wrap items-center justify-between px-3 py-1.5 max-w-[1700px]">
           
           {/* Menu items list */}
-          <div className="flex flex-wrap items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+          <div className="flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
             
             {/* BACK TO LOGIN */}
             <button
               onClick={onLogout}
-              className="flex items-center gap-1.5 px-3 py-1 text-xs font-sans font-bold text-slate-700 hover:text-indigo-600 hover:bg-slate-200 rounded cursor-pointer transition-all mr-2.5 border-r border-slate-300 pr-3.5"
+              className={`${getNavbarItemClass(false)} mr-1`}
               title="Back to login selection"
             >
               <ArrowLeft className="w-3.5 h-3.5 text-slate-500" />
@@ -1216,9 +1365,11 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
               <button
                 onClick={() => setOpenMenu(openMenu === 'file' ? null : 'file')}
                 onMouseEnter={() => openMenu && setOpenMenu('file')}
-                className={`px-3 py-1 text-xs font-sans font-semibold text-slate-755 hover:bg-slate-200 hover:text-slate-900 rounded cursor-pointer transition-all ${openMenu === 'file' ? 'bg-slate-200 text-slate-900 shadow-sm' : ''}`}
+                className={getNavbarItemClass(openMenu === 'file')}
               >
-                File
+                <Plus className="w-3.5 h-3.5" />
+                <span>File</span>
+                <ChevronDown className="w-3 h-3 opacity-60" />
               </button>
               {openMenu === 'file' && (
                 <div className="absolute left-0 mt-1 w-60 bg-white border border-slate-300 rounded-lg shadow-xl py-1 z-50">
@@ -1242,12 +1393,13 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
             </div>
 
             {/* SET WEIGHTAGE DIRECT ITEM */}
-            <div className="relative">
+            <div className="relative font-bold">
               <button
                 onClick={() => { setActiveTab('weightage'); setOpenMenu(null); }}
-                className={`px-3 py-1 text-xs font-sans font-semibold text-slate-755 hover:bg-slate-200 hover:text-slate-900 rounded cursor-pointer transition-all ${activeTab === 'weightage' ? 'bg-slate-200 text-indigo-955 font-bold' : ''}`}
+                className={getNavbarItemClass(activeTab === 'weightage')}
               >
-                Set Weightage
+                <Percent className="w-3.5 h-3.5" />
+                <span>Set Weightage</span>
               </button>
             </div>
 
@@ -1264,9 +1416,11 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                     setActiveTab('edit-items');
                   }
                 }}
-                className={`px-3 py-1 text-xs font-sans font-semibold text-slate-755 hover:bg-slate-200 hover:text-slate-900 rounded cursor-pointer transition-all ${openMenu === 'edit-items' || activeTab === 'edit-items' ? 'bg-slate-200 text-slate-900 shadow-sm' : ''}`}
+                className={getNavbarItemClass(openMenu === 'edit-items' || activeTab === 'edit-items')}
               >
-                Edit Items
+                <Edit3 className="w-3.5 h-3.5" />
+                <span>Edit Items</span>
+                <ChevronDown className="w-3 h-3 opacity-60" />
               </button>
               {openMenu === 'edit-items' && selectedCourse && (
                 <div className="absolute left-0 mt-1 w-64 bg-white border border-slate-300 rounded-lg shadow-xl py-1 z-50 max-h-96 overflow-y-auto font-sans">
@@ -1277,10 +1431,10 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                     <button
                       key={cat.name}
                       onClick={() => { 
-                        handleOpenUnitEditor(cat.name); 
-                        setActiveTab('edit-items');
-                        setOpenMenu(null); 
-                      }}
+                      handleOpenUnitEditor(cat.name); 
+                      setActiveTab('edit-items');
+                      setOpenMenu(null); 
+                    }}
                       className="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-indigo-50 hover:text-indigo-950 flex items-center gap-2 rounded focus:outline-none font-medium"
                     >
                       <BookOpen className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
@@ -1295,20 +1449,81 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
             <div className="relative font-bold">
               <button
                 onClick={() => { setActiveTab('marks-entry'); setOpenMenu(null); }}
-                className={`px-3 py-1 text-xs font-sans font-semibold text-slate-755 hover:bg-slate-200 hover:text-slate-900 rounded cursor-pointer transition-all ${activeTab === 'marks-entry' ? 'bg-slate-200 text-indigo-955 font-bold' : ''}`}
+                className={getNavbarItemClass(activeTab === 'marks-entry')}
               >
-                Enter Marks
+                <Pencil className="w-3.5 h-3.5" />
+                <span>Enter Marks</span>
               </button>
             </div>
 
+            {/* OBE COCKPIT */}
+            <div className="relative font-extrabold text-indigo-950">
+              <button
+                onClick={() => {
+                  setActiveTab('obe');
+                  setOpenMenu(openMenu === 'obe' ? null : 'obe');
+                }}
+                onMouseEnter={() => {
+                  if (openMenu) {
+                    setOpenMenu('obe');
+                  }
+                }}
+                className={getNavbarItemClass(activeTab === 'obe' || openMenu === 'obe')}
+              >
+                <Award className="w-3.5 h-3.5" />
+                <span>OBE Cockpit</span>
+                <ChevronDown className="w-3 h-3 opacity-60" />
+              </button>
+              {openMenu === 'obe' && (
+                <div className="absolute left-0 mt-1 w-64 bg-white border border-slate-300 rounded-lg shadow-xl py-1.5 z-5 z-50 font-sans">
+                  <div className="px-3.5 py-1 text-[9px] text-slate-400 font-bold uppercase tracking-wider font-sans">
+                    OBE Configuration & Analytics
+                  </div>
+                  <button
+                    onClick={() => {
+                      setActiveTab('obe');
+                      setObeSubTab('questions');
+                      setOpenMenu(null);
+                    }}
+                    className={`w-full text-left px-3.5 py-2 text-xs hover:bg-indigo-50 hover:text-indigo-950 flex items-center gap-2 rounded-md focus:outline-none font-semibold ${obeSubTab === 'questions' && activeTab === 'obe' ? 'bg-indigo-50 text-indigo-950 font-extrabold border-l-2 border-indigo-600 pl-3' : 'text-slate-700'}`}
+                  >
+                    <ClipboardList className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                    <span>Questions Mapping</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setActiveTab('obe');
+                      setObeSubTab('marks');
+                      setOpenMenu(null);
+                    }}
+                    className={`w-full text-left px-3.5 py-2 text-xs hover:bg-indigo-50 hover:text-indigo-950 flex items-center gap-2 rounded-md focus:outline-none font-semibold ${obeSubTab === 'marks' && activeTab === 'obe' ? 'bg-indigo-50 text-indigo-950 font-extrabold border-l-2 border-indigo-600 pl-3' : 'text-slate-700'}`}
+                  >
+                    <Pencil className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                    <span>OBE Marks Entry</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setActiveTab('obe');
+                      setObeSubTab('reports');
+                      setOpenMenu(null);
+                    }}
+                    className={`w-full text-left px-3.5 py-2 text-xs hover:bg-indigo-50 hover:text-indigo-950 flex items-center gap-2 rounded-md focus:outline-none font-semibold ${obeSubTab === 'reports' && activeTab === 'obe' ? 'bg-indigo-50 text-indigo-950 font-extrabold border-l-2 border-indigo-600 pl-3' : 'text-slate-700'}`}
+                  >
+                    <FileText className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                    <span>CLO Reports & Analytics</span>
+                  </button>
+                </div>
+              )}
+            </div>
 
             {/* REGISTERED ROSTER */}
             <div className="relative">
               <button
                 onClick={() => { setActiveTab('students'); setOpenMenu(null); }}
-                className={`px-3 py-1 text-xs font-sans font-semibold text-slate-755 hover:bg-slate-200 hover:text-slate-900 rounded cursor-pointer transition-all ${activeTab === 'students' ? 'bg-slate-200 text-indigo-955 font-bold' : ''}`}
+                className={getNavbarItemClass(activeTab === 'students')}
               >
-                Add Student
+                <Users className="w-3.5 h-3.5" />
+                <span>Add Student</span>
               </button>
             </div>
 
@@ -1317,9 +1532,11 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
               <button
                 onClick={() => setOpenMenu(openMenu === 'reports' ? null : 'reports')}
                 onMouseEnter={() => openMenu && setOpenMenu('reports')}
-                className={`px-3 py-1 text-xs font-sans font-semibold text-slate-755 hover:bg-slate-200 hover:text-slate-900 rounded cursor-pointer transition-all ${openMenu === 'reports' ? 'bg-slate-200 text-slate-900 shadow-sm' : ''}`}
+                className={getNavbarItemClass(openMenu === 'reports')}
               >
-                Reports
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>Reports</span>
+                <ChevronDown className="w-3 h-3 opacity-60" />
               </button>
               {openMenu === 'reports' && (
                 <div className="absolute left-0 mt-1 w-64 bg-white border border-slate-300 rounded-lg shadow-xl py-1 z-50">
@@ -1349,9 +1566,11 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
               <button
                 onClick={() => setOpenMenu(openMenu === 'about' ? null : 'about')}
                 onMouseEnter={() => openMenu && setOpenMenu('about')}
-                className={`px-3 py-1 text-xs font-sans font-semibold text-slate-755 hover:bg-slate-200 hover:text-slate-900 rounded cursor-pointer transition-all ${openMenu === 'about' ? 'bg-slate-200 text-slate-900 shadow-sm' : ''}`}
+                className={getNavbarItemClass(openMenu === 'about')}
               >
-                About
+                <Info className="w-3.5 h-3.5" />
+                <span>About</span>
+                <ChevronDown className="w-3 h-3 opacity-60" />
               </button>
               {openMenu === 'about' && (
                 <div className="absolute left-0 mt-1 w-64 bg-white border border-slate-300 rounded-lg shadow-xl py-1.5 z-50">
@@ -2477,6 +2696,590 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                       </table>
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* TAB 6: OBE COCKPIT */}
+              {activeTab === 'obe' && selectedCourse && (
+                <div className="space-y-6">
+                  {/* OBE Navigation Header Card */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-200 pb-4 gap-4">
+                    <div>
+                      <span className="text-[10px] text-indigo-600 font-extrabold uppercase tracking-widest bg-indigo-50 px-2 py-0.5 rounded border border-indigo-150">OBE Cockpit Dashboard</span>
+                      <h2 className="text-lg font-extrabold text-slate-900 mt-1 flex items-center gap-2">
+                        {obeSubTab === 'questions' && (
+                          <>
+                            <ClipboardList className="w-5 h-5 text-indigo-600 animate-pulse" />
+                            <span>CLO Questions Mapping</span>
+                          </>
+                        )}
+                        {obeSubTab === 'marks' && (
+                          <>
+                            <Pencil className="w-5 h-5 text-indigo-600 animate-pulse" />
+                            <span>OBE Marks Registration Ledger</span>
+                          </>
+                        )}
+                        {obeSubTab === 'reports' && (
+                          <>
+                            <FileText className="w-5 h-5 text-indigo-600 animate-pulse" />
+                            <span>CLO Attainment Reports & Analytics</span>
+                          </>
+                        )}
+                      </h2>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-slate-500 font-sans italic flex items-center gap-1.5 bg-indigo-50/50 px-3 py-1.5 border border-indigo-100/50 rounded-lg">
+                        <Sparkles className="w-3.5 h-3.5 text-indigo-500 animate-pulse shrink-0" />
+                        <span>Outcome Based Education Ledger Engine</span>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* SUB-TAB 1: QUESTIONS MAPPING */}
+                  {obeSubTab === 'questions' && (
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start font-sans">
+                      {/* Left: Creator Panel */}
+                      <div className="lg:col-span-5 bg-slate-50/50 border border-slate-200 rounded-xl p-5 space-y-4">
+                        <div className="border-b border-slate-200 pb-2">
+                          <h4 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                            <Plus className="w-4 h-4 text-indigo-600" />
+                            {editingQuestionId ? 'Update OBE Question' : 'Define Assessment Question'}
+                          </h4>
+                          <p className="text-[11px] text-slate-500 mt-1">
+                            Choose an assessment, create question labels, set max marks, and tick target CLOs.
+                          </p>
+                        </div>
+
+                        {/* SELECT ASSESSMENT DROPDOWN */}
+                        <div className="space-y-1.5">
+                          <label className="block text-[11px] font-bold text-slate-700 tracking-wide uppercase font-sans">
+                            Assessment Component
+                          </label>
+                          <select
+                            value={selectedObeAssKey}
+                            onChange={(e) => {
+                              setSelectedObeAssKey(e.target.value);
+                              resetObeForm();
+                            }}
+                            className="w-full text-xs bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-800 font-sans font-medium focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer"
+                          >
+                            {selectedCourse.categories.map(cat => {
+                              const list = [];
+                              for (let u = 1; u <= cat.units; u++) {
+                                list.push(
+                                  <option key={`${cat.name}:::${u}`} value={`${cat.name}:::${u}`}>
+                                    {cat.name} — Unit {u} (Max {selectedCourse.unitsData[cat.name]?.[u-1]?.totalMarks || 10}m)
+                                  </option>
+                                );
+                              }
+                              return list;
+                            })}
+                          </select>
+                        </div>
+
+                        {/* QUESTION LABEL */}
+                        <div className="space-y-1.5">
+                          <label className="block text-[11px] font-bold text-slate-700 tracking-wide uppercase font-sans">
+                            Question Label
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Question 1, Q1a, Part A"
+                            value={qName}
+                            onChange={(e) => setQName(e.target.value)}
+                            className="w-full text-xs bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-800 font-sans font-semibold focus:ring-2 focus:ring-indigo-500 outline-none"
+                          />
+                        </div>
+
+                        {/* MAX MARKS */}
+                        <div className="space-y-1.5">
+                          <label className="block text-[11px] font-bold text-slate-700 tracking-wide uppercase font-sans">
+                            Maximum Marks Set
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            step="0.5"
+                            placeholder="10"
+                            value={qMaxMarks}
+                            onChange={(e) => setQMaxMarks(e.target.value)}
+                            className="w-full text-xs bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-800 font-sans font-semibold focus:ring-2 focus:ring-indigo-500 outline-none"
+                          />
+                        </div>
+
+                        {/* CLO MAPPING CHECKBOXES */}
+                        <div className="space-y-2">
+                          <label className="block text-[11px] font-bold text-slate-700 tracking-wide uppercase font-sans">
+                            Map to CLOs (Tick Boxes)
+                          </label>
+                          <div className="grid grid-cols-2 gap-2 text-slate-800 font-sans">
+                            {['CLO-1', 'CLO-2', 'CLO-3', 'CLO-4'].map(clo => {
+                              const checked = qClos.includes(clo);
+                              return (
+                                <label
+                                  key={clo}
+                                  className={`flex items-center gap-2 p-2 px-2.5 border rounded-lg cursor-pointer text-xs font-semibold select-none transition-all ${checked ? 'border-indigo-300 bg-indigo-50/50 text-indigo-950 font-bold' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => {
+                                      if (checked) {
+                                        setQClos(prev => prev.filter(c => c !== clo));
+                                      } else {
+                                        setQClos(prev => [...prev, clo]);
+                                      }
+                                    }}
+                                    className="accent-indigo-600 rounded text-indigo-600 shrink-0 cursor-pointer text-xs"
+                                  />
+                                  <span>{clo}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* SUBMIT BUTTON */}
+                        <div className="flex gap-2 pt-2">
+                          <button
+                            onClick={handleSaveObeQuestion}
+                            className="flex-1 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-sm transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                          >
+                            <Save className="w-3.5 h-3.5" />
+                            <span>{editingQuestionId ? 'Update' : 'Add Question'}</span>
+                          </button>
+                          {editingQuestionId && (
+                            <button
+                              onClick={resetObeForm}
+                              className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold rounded-lg transition-all cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Right: Questions list for selected Component */}
+                      <div className="lg:col-span-7 space-y-4 font-sans">
+                        <div>
+                          <h4 className="text-sm font-bold text-slate-900">
+                            Questions in <strong className="text-indigo-950">{selectedObeAssKey ? selectedObeAssKey.replace(':::', ' - Unit ') : ''}</strong>
+                          </h4>
+                          <p className="text-[11px] text-slate-500 mt-0.5">
+                            Configure sub-questions and map each to direct CLO competencies.
+                          </p>
+                        </div>
+
+                        {/* Created questions list table */}
+                        <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-xs">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead className="bg-[#f8fafc] border-b border-slate-200 text-[10px] font-bold text-indigo-950 uppercase tracking-wider font-sans">
+                              <tr>
+                                <th className="py-2 px-3">Question</th>
+                                <th className="py-2 px-3 text-center">Max Marks</th>
+                                <th className="py-2 px-3">CLO Mapping</th>
+                                <th className="py-2 px-3 text-center">Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-150">
+                              {(selectedCourse.obeQuestions || []).filter(q => {
+                                if (!selectedObeAssKey) return true;
+                                const [catName, uNoStr] = selectedObeAssKey.split(':::');
+                                return q.categoryName === catName && q.unitNo === parseInt(uNoStr, 10);
+                              }).map(q => (
+                                <tr key={q.id} className="hover:bg-slate-50/55 font-medium text-slate-700">
+                                  <td className="py-2 px-3 font-bold text-slate-900 font-sans text-xs">
+                                    {q.questionName}
+                                  </td>
+                                  <td className="py-2 px-3 text-center font-mono font-bold text-slate-900">
+                                    {q.maxMarks}
+                                  </td>
+                                  <td className="py-2 px-3">
+                                    <div className="flex flex-wrap gap-1">
+                                      {q.mappedCLOs.map(clo => (
+                                        <span key={clo} className="px-1.5 py-0.5 text-[9px] bg-indigo-50 border border-indigo-200/50 text-indigo-700 rounded font-bold">
+                                          {clo}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </td>
+                                  <td className="py-2 px-3 text-center">
+                                    <div className="flex items-center justify-center gap-1.5 text-slate-500">
+                                      <button
+                                        onClick={() => {
+                                          setEditingQuestionId(q.id);
+                                          setQName(q.questionName);
+                                          setQMaxMarks(q.maxMarks.toString());
+                                          setQClos(q.mappedCLOs);
+                                        }}
+                                        className="p-1 hover:text-indigo-600 hover:bg-indigo-50 rounded cursor-pointer transition-all"
+                                      >
+                                        <Pencil className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        onClick={() => handleDeleteObeQuestion(q.id)}
+                                        className="p-1 hover:text-rose-600 hover:bg-rose-50 rounded cursor-pointer transition-all"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+
+                              {(selectedCourse.obeQuestions || []).filter(q => {
+                                if (!selectedObeAssKey) return true;
+                                const [catName, uNoStr] = selectedObeAssKey.split(':::');
+                                return q.categoryName === catName && q.unitNo === parseInt(uNoStr, 10);
+                              }).length === 0 && (
+                                <tr>
+                                  <td colSpan={4} className="py-8 text-center text-slate-450 italic text-xs">
+                                    No questions defined for this component yet.
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* SUB-TAB 2: OBE MARKS GRID */}
+                  {obeSubTab === 'marks' && (
+                    <div className="space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <h4 className="text-sm font-bold text-slate-900 font-sans">
+                            OBE Registrations & Question Marks Ledger
+                          </h4>
+                          <p className="text-[11px] text-slate-500 mt-0.5 font-sans">
+                            Set student obtained marks for each OBE assessment question. Grid auto-caps to max marks for fail-safety.
+                          </p>
+                        </div>
+                        {/* Selector for Assessment component */}
+                        <div className="flex items-center gap-2 bg-slate-50/50 border border-slate-200 px-3 py-1.5 rounded-lg select-none">
+                          <span className="text-[9px] text-indigo-950 font-bold tracking-wide uppercase font-sans">COMPONENT FILTER:</span>
+                          <select
+                            value={selectedObeAssKey}
+                            onChange={(e) => setSelectedObeAssKey(e.target.value)}
+                            className="bg-transparent border-none text-slate-800 text-xs font-bold font-sans focus:outline-none cursor-pointer"
+                          >
+                            {selectedCourse.categories.map(cat => {
+                              const list = [];
+                              for (let u = 1; u <= cat.units; u++) {
+                                list.push(
+                                  <option key={`${cat.name}:::${u}`} value={`${cat.name}:::${u}`}>
+                                    {cat.name} — Unit {u} (Max {selectedCourse.unitsData[cat.name]?.[u-1]?.totalMarks || 10}m)
+                                  </option>
+                                );
+                              }
+                              return list;
+                            })}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Table structure */}
+                      {(() => {
+                        const currentQs = (selectedCourse.obeQuestions || []).filter(q => {
+                          if (!selectedObeAssKey) return true;
+                          const [catName, uNoStr] = selectedObeAssKey.split(':::');
+                          return q.categoryName === catName && q.unitNo === parseInt(uNoStr, 10);
+                        });
+
+                        if (currentQs.length === 0) {
+                          return (
+                            <div className="border border-indigo-100 bg-indigo-50/45 p-8 text-center rounded-2xl max-w-xl mx-auto space-y-3 shadow-xs">
+                              <ClipboardList className="w-10 h-10 text-indigo-500 mx-auto animate-pulse" />
+                              <h5 className="font-extrabold text-indigo-950 font-sans text-sm">No OBE Questions defined for this component</h5>
+                              <p className="text-xs text-slate-600 leading-relaxed font-sans max-w-md mx-auto">
+                                To enter student marks, you first need to define questions (e.g. Q1, Q2) and set their maximum marks. Go to the <strong className="text-indigo-900 cursor-pointer underline" onClick={() => setObeSubTab('questions')}>Questions Mapping</strong> section to load them.
+                              </p>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-xs">
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-left border-collapse text-xs">
+                                <thead className="bg-[#f8fafc] border-b border-slate-200 font-sans">
+                                  <tr>
+                                    <th className="py-2.5 px-4 font-bold text-slate-800">Registration</th>
+                                    <th className="py-2.5 px-3 font-bold text-slate-800 border-r border-slate-200">Student Name</th>
+                                    {currentQs.map(q => (
+                                      <th key={q.id} className="py-2 px-2 text-center border-r border-slate-200 bg-indigo-50/10">
+                                        <span className="block text-indigo-950 font-black">{q.questionName}</span>
+                                        <span className="block text-[8px] text-slate-500 font-bold mt-0.5">Max {q.maxMarks}m</span>
+                                        <span className="block text-[8px] text-indigo-600 font-extrabold mt-0.5 font-mono">{q.mappedCLOs.join(', ')}</span>
+                                      </th>
+                                    ))}
+                                    <th className="py-2.5 px-3 text-center text-slate-900 font-bold bg-slate-100/50">Actions</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-150 font-mono text-slate-705">
+                                  {selectedCourse.students.map((student) => (
+                                    <tr key={student.regNo} className="hover:bg-slate-50/50 font-medium text-slate-700 text-xs">
+                                      <td className="py-2 px-4 font-bold text-indigo-950">{student.regNo}</td>
+                                      <td className="py-2 px-3 border-r border-slate-200 text-slate-900 font-sans font-semibold">{student.name}</td>
+                                      {currentQs.map(q => {
+                                        const preVal = selectedCourse.obeMarks?.[student.regNo]?.[q.id] ?? 0;
+                                        return (
+                                          <td key={q.id} className="py-1 px-1 border-r border-slate-200 text-center">
+                                            <input
+                                              type="number"
+                                              min="0"
+                                              max={q.maxMarks}
+                                              step="0.5"
+                                              className="w-16 bg-white text-slate-900 border border-slate-250 text-center rounded-md font-sans text-xs py-1 outline-none ring-offset-2 focus:ring-2 focus:ring-indigo-500 font-bold"
+                                              value={preVal}
+                                              onChange={(e) => {
+                                                let num = parseFloat(e.target.value);
+                                                if (isNaN(num)) num = 0;
+                                                if (num < 0) num = 0;
+                                                if (num > q.maxMarks) num = q.maxMarks;
+                                                handleSaveObeMark(student.regNo, q.id, num);
+                                              }}
+                                            />
+                                          </td>
+                                        );
+                                      })}
+                                      <td className="py-1 px-3 text-center bg-slate-50/50">
+                                        <button
+                                          onClick={() => {
+                                            if (confirm(`Reset OBE marks for ${student.name}?`)) {
+                                              currentQs.forEach(q => {
+                                                handleSaveObeMark(student.regNo, q.id, 0);
+                                              });
+                                            }
+                                          }}
+                                          className="text-[10px] text-rose-600 hover:text-rose-900 font-bold cursor-pointer font-sans"
+                                        >
+                                          Reset
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  ))}
+
+                                  {selectedCourse.students.length === 0 && (
+                                    <tr>
+                                      <td colSpan={3 + currentQs.length} className="py-12 bg-slate-50/50 text-center text-slate-505 font-sans">
+                                        <Users className="w-8 h-8 text-slate-350 mx-auto mb-2" />
+                                        <h5 className="font-bold text-slate-700 font-sans">Course Student Register is empty</h5>
+                                        <p className="text-[10px] text-slate-500 mt-1 font-sans">Please enroll students via "Add Student" tab to record marks.</p>
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  {/* SUB-TAB 3: CLO REPORTS */}
+                  {obeSubTab === 'reports' && (
+                    <div className="space-y-6">
+                      
+                      {/* Overall CLO Attainments Visual Gauge cards */}
+                      {(() => {
+                        const students = selectedCourse.students;
+                        const qs = selectedCourse.obeQuestions || [];
+                        const marks = selectedCourse.obeMarks || {};
+
+                        const cloPerformance = ['CLO-1', 'CLO-2', 'CLO-3', 'CLO-4'].map(clo => {
+                          const cloQs = qs.filter(q => q.mappedCLOs.includes(clo));
+                          let totalClassMax = 0;
+                          let totalClassObs = 0;
+                          let attainedStudentsCount = 0;
+
+                          students.forEach(std => {
+                            let stdMax = 0;
+                            let stdObs = 0;
+                            cloQs.forEach(q => {
+                              stdMax += q.maxMarks;
+                              stdObs += marks[std.regNo]?.[q.id] ?? 0;
+                            });
+
+                            if (stdMax > 0) {
+                              const stdPct = (stdObs / stdMax) * 100;
+                              if (stdPct >= 50) {
+                                attainedStudentsCount++;
+                              }
+                            }
+                            totalClassMax += stdMax;
+                            totalClassObs += stdObs;
+                          });
+
+                          const classAvgPct = totalClassMax > 0 ? (totalClassObs / totalClassMax) * 100 : 0;
+                          const attainmentRatePct = students.length > 0 ? (attainedStudentsCount / students.length) * 100 : 0;
+
+                          return {
+                            name: clo,
+                            mappedQs: cloQs.length,
+                            classAvg: classAvgPct,
+                            attainmentRate: attainmentRatePct
+                          };
+                        });
+
+                        return (
+                          <div className="space-y-6 font-sans">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                              {cloPerformance.map(clo => (
+                                <div key={clo.name} className="bg-slate-50/70 border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3 transition-transform hover:translate-y-[-2px] hover:shadow-sm">
+                                  <div className="flex items-center justify-between border-b border-slate-150 pb-2">
+                                    <span className="text-xs font-black text-indigo-950 uppercase tracking-widest">{clo.name}</span>
+                                    <span className="text-[10px] bg-indigo-50 border border-indigo-200/50 text-indigo-800 font-bold px-2 py-0.5 rounded-full">
+                                      {clo.mappedQs} Qs
+                                    </span>
+                                  </div>
+
+                                  <div className="space-y-1">
+                                    <div className="flex justify-between text-xs font-semibold text-slate-500">
+                                      <span>Average Score:</span>
+                                      <span className="text-indigo-955 font-bold font-mono">{clo.classAvg.toFixed(1)}%</span>
+                                    </div>
+                                    <div className="w-full bg-slate-200 rounded-full h-2">
+                                      <div
+                                        className="bg-indigo-600 h-2 rounded-full transition-all duration-500"
+                                        style={{ width: `${Math.min(100, clo.classAvg)}%` }}
+                                      ></div>
+                                    </div>
+                                  </div>
+
+                                  <div className="space-y-1">
+                                    <div className="flex justify-between text-xs font-semibold text-slate-500">
+                                      <span>Class Attainment (≥50%):</span>
+                                      <span className={`font-bold font-mono ${clo.attainmentRate >= 60 ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                        {clo.attainmentRate.toFixed(1)}%
+                                      </span>
+                                    </div>
+                                    <div className="w-full bg-slate-200 rounded-full h-1.5">
+                                      <div
+                                        className={`h-1.5 rounded-full transition-all duration-500 ${clo.attainmentRate >= 60 ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                                        style={{ width: `${Math.min(100, clo.attainmentRate)}%` }}
+                                      ></div>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+
+                            {/* Detailed Student CLO Ledger Sheet */}
+                            <div className="space-y-3">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                <div>
+                                  <h4 className="text-sm font-extrabold text-[#111827]">
+                                    Student Individual CLO Attainment Grades Ledger
+                                  </h4>
+                                  <p className="text-[11px] text-slate-500 mt-0.5">
+                                    List of students with computed outcome competency progress bars. Threshold for attainment is defined at 50%.
+                                  </p>
+                                </div>
+                                <button
+                                  onClick={() => window.print()}
+                                  className="px-3.5 py-1.5 bg-indigo-50 border border-indigo-250 text-indigo-700 rounded-lg hover:bg-indigo-100 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer font-sans"
+                                >
+                                  <Award className="w-3.5 h-3.5" />
+                                  <span>Print Reports Sheet (PDF)</span>
+                                </button>
+                              </div>
+
+                              <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-xs">
+                                <table className="w-full text-left border-collapse text-xs">
+                                  <thead className="bg-[#f8fafc] border-b border-slate-200 font-sans text-slate-800">
+                                    <tr>
+                                      <th className="py-2.5 px-4 font-bold">Registration No</th>
+                                      <th className="py-2.5 px-3 font-bold border-r border-slate-200">FullName</th>
+                                      {['CLO-1', 'CLO-2', 'CLO-3', 'CLO-4'].map(clo => (
+                                        <th key={clo} className="py-2.5 px-3 text-center border-r border-slate-200 font-bold bg-slate-100/10">
+                                          {clo} (%)
+                                        </th>
+                                      ))}
+                                      <th className="py-2.5 px-3 text-center font-bold">Comprehensive Outcome Status</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-150 font-mono text-slate-705 text-xs">
+                                    {selectedCourse.students.map((student) => {
+                                      const attList: { name: string; pct: number | null; attained: boolean }[] = [];
+                                      let totalAttained = 0;
+                                      let clCountWithData = 0;
+
+                                      const cellRender = ['CLO-1', 'CLO-2', 'CLO-3', 'CLO-4'].map(clo => {
+                                        const cloQs = qs.filter(q => q.mappedCLOs.includes(clo));
+                                        let stdMax = 0;
+                                        let stdObs = 0;
+                                        cloQs.forEach(q => {
+                                          stdMax += q.maxMarks;
+                                          stdObs += marks[student.regNo]?.[q.id] ?? 0;
+                                        });
+
+                                        const pctVal = stdMax > 0 ? (stdObs / stdMax) * 100 : null;
+                                        const attained = pctVal !== null ? pctVal >= 50 : false;
+                                        if (pctVal !== null) {
+                                          clCountWithData++;
+                                          if (attained) totalAttained++;
+                                        }
+
+                                        attList.push({ name: clo, pct: pctVal, attained });
+
+                                        return (
+                                          <td key={clo} className="py-2 px-3 text-center border-r border-slate-200">
+                                            {pctVal !== null ? (
+                                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${attained ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}>
+                                                {pctVal.toFixed(1)}%
+                                              </span>
+                                            ) : (
+                                              <span className="text-slate-400 text-[10px] italic">-</span>
+                                            )}
+                                          </td>
+                                        );
+                                      });
+
+                                      const isComprehensiveAttained = clCountWithData > 0 ? (totalAttained / clCountWithData) >= 0.75 : false;
+
+                                      return (
+                                        <tr key={student.regNo} className="hover:bg-slate-50/50 font-semibold text-slate-700">
+                                          <td className="py-2.5 px-4 font-bold text-indigo-950">{student.regNo}</td>
+                                          <td className="py-2.5 px-3 border-r border-slate-200 text-slate-900 font-sans font-semibold">{student.name}</td>
+                                          {cellRender}
+                                          <td className="py-2.5 px-3 text-center font-sans">
+                                            {clCountWithData > 0 ? (
+                                              <span className={`px-3 py-1 rounded-full text-[10px] font-bold inline-flex items-center gap-1 ${isComprehensiveAttained ? 'bg-emerald-600 text-white shadow-xs' : 'bg-amber-100 text-amber-800'}`}>
+                                                {isComprehensiveAttained ? '✔ EXCELLENT / ATTAINED' : '⚠ CLO UNDER CRITERION'}
+                                              </span>
+                                            ) : (
+                                              <span className="text-slate-400 text-xs italic">No OBE marks loaded</span>
+                                            )}
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+
+                                    {selectedCourse.students.length === 0 && (
+                                      <tr>
+                                        <td colSpan={7} className="py-12 bg-slate-50/50 text-center text-slate-505 font-sans">
+                                          <FileText className="w-8 h-8 text-slate-350 mx-auto mb-2 animate-bounce" />
+                                          <h5 className="font-bold text-slate-700">No student records to compile CLO performance</h5>
+                                          <p className="text-[10px] text-slate-500 mt-1">Populate student registrations to generate automated reports.</p>
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                    </div>
+                  )}
+
                 </div>
               )}
 

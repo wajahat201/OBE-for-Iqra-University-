@@ -67,6 +67,15 @@ export interface CourseStudent {
   marks?: Record<string, number>;
 }
 
+export interface OBEQuestion {
+  id: string;
+  categoryName: string;
+  unitNo: number;
+  questionName: string;
+  maxMarks: number;
+  mappedCLOs: string[]; // e.g. ["CLO-1", "CLO-2", "CLO-3", "CLO-4"]
+}
+
 export interface InstructorCourse {
   id: string;
   code: string;
@@ -79,4 +88,6 @@ export interface InstructorCourse {
   categories: MarksCategory[];
   unitsData: Record<string, UnitItem[]>;
   students: CourseStudent[];
+  obeQuestions?: OBEQuestion[];
+  obeMarks?: Record<string, Record<string, number>>; // studentRegNo -> { questionId: marks }
 }
