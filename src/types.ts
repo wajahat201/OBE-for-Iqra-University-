@@ -54,11 +54,20 @@ export interface MarksCategory {
   units: number;
 }
 
+export interface UnitQuestion {
+  id: string;
+  name: string;
+  maxMarks: number;
+  mappedCLOs: string[];
+}
+
 export interface UnitItem {
   unitNo: number;
   passing: number;
   totalMarks: number;
   weightage: number;
+  mappedCLOs?: string[];
+  questions?: UnitQuestion[];
 }
 
 export interface CourseStudent {
@@ -90,4 +99,7 @@ export interface InstructorCourse {
   students: CourseStudent[];
   obeQuestions?: OBEQuestion[];
   obeMarks?: Record<string, Record<string, number>>; // studentRegNo -> { questionId: marks }
+  cloCount?: number;
+  selectedGradingSystem?: string;
+  customGradingSystem?: { grade: string; percentage: string; points: string }[];
 }

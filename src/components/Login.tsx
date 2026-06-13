@@ -9,7 +9,7 @@ interface LoginProps {
 }
 
 export default function Login({ onLogin }: LoginProps) {
-  const [userType, setUserType] = useState<UserType>('qa');
+  const [userType, setUserType] = useState<UserType | ''>('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -18,6 +18,12 @@ export default function Login({ onLogin }: LoginProps) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    if (!userType) {
+      setError('Please select a user type first.');
+      return;
+    }
+
     setLoading(true);
 
     const controller = new AbortController();
@@ -51,7 +57,7 @@ export default function Login({ onLogin }: LoginProps) {
       setError('Connection to backend failed. Logging you into offline corporate sandbox demo...');
       setTimeout(() => {
         // Fallback login
-        onLogin(userType, username || 'QA Advisor');
+        onLogin(userType as UserType, username || 'QA Advisor');
       }, 1200);
     } finally {
       // delay state reset to make transition look native
@@ -81,34 +87,6 @@ export default function Login({ onLogin }: LoginProps) {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          {/* User type selector — visual only, actual role comes from Django */}
-          <div className="grid grid-cols-1 gap-3">
-            <span className="text-xs font-sans font-bold uppercase tracking-wider text-indigo-900/60 ml-1">
-              Select User Type
-            </span>
-            <div className="grid grid-cols-3 gap-3">
-              {userTypes.map((t) => (
-                <button
-                  key={t.type}
-                  type="button"
-                  onClick={() => setUserType(t.type)}
-                  className={`flex flex-col items-center justify-center p-4 rounded-2xl border transition-all ${
-                    userType === t.type
-                      ? 'border-indigo-600 bg-indigo-600/10 shadow-sm text-indigo-900 font-bold'
-                      : 'border-white/20 bg-white/30 hover:bg-white/50 text-slate-600'
-                  }`}
-                >
-                  <t.icon className={`w-6 h-6 mb-2 ${userType === t.type ? 'text-indigo-600' : 'text-slate-500'}`} />
-                  <span className={`text-[10px] font-sans font-bold uppercase tracking-tighter text-center leading-none ${
-                    userType === t.type ? 'text-indigo-900' : 'text-slate-500'
-                  }`}>
-                    {t.type}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-
           <div className="space-y-4">
             <div>
               <label className="block text-xs font-sans font-bold uppercase tracking-wider text-indigo-900/60 ml-1 mb-2">
@@ -135,6 +113,29 @@ export default function Login({ onLogin }: LoginProps) {
                 className="w-full px-5 py-4 bg-white/40 border border-white/40 rounded-2xl font-sans focus:bg-white/60 focus:ring-2 focus:ring-indigo-600/20 transition-all outline-none text-indigo-950 placeholder:text-indigo-800/40"
                 required
               />
+            </div>
+            <div>
+              <label className="block text-xs font-sans font-bold uppercase tracking-wider text-indigo-900/60 ml-1 mb-2">
+                Select User Type
+              </label>
+              <div className="relative">
+                <select
+                  value={userType}
+                  onChange={(e) => setUserType(e.target.value as UserType | '')}
+                  className="w-full px-5 py-4 bg-white/40 border border-white/40 rounded-2xl font-sans focus:bg-white/60 focus:ring-2 focus:ring-indigo-600/20 transition-all outline-none text-indigo-950 appearance-none cursor-pointer pr-10"
+                  required
+                >
+                  <option value="" disabled className="bg-slate-50 text-slate-400">Select User Type...</option>
+                  <option value="qa" className="bg-slate-50 text-slate-900">QA / Quality Assurance</option>
+                  <option value="instructor" className="bg-slate-50 text-slate-900">Instructor</option>
+                  <option value="student" className="bg-slate-50 text-slate-900">Student</option>
+                </select>
+                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-5 text-indigo-900/60">
+                  <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+                    <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/>
+                  </svg>
+                </div>
+              </div>
             </div>
           </div>
 

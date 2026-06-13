@@ -31,10 +31,13 @@ import {
   FileText,
   Percent,
   Edit3,
-  Trash
+  Trash,
+  ClipboardCheck,
+  Search
 } from 'lucide-react';
 import { apiService, BASE_URL } from '../services/apiService';
-import { Course, Department, Program, MarksCategory, UnitItem, CourseStudent, InstructorCourse } from '../types';
+import { Course, Department, Program, MarksCategory, UnitItem, UnitQuestion, CourseStudent, InstructorCourse } from '../types';
+import MarksEntrySpreadsheet from './MarksEntrySpreadsheet';
 
 interface InstructorDashboardProps {
   onLogout: () => void;
@@ -54,8 +57,34 @@ export const getCategoryPrefix = (name: string): string => {
   return name.split(' ').map(w => w[0]).join('').toUpperCase();
 };
 
-// Precise score extractor returning 0 by default, ensuring no dummy data
-export const getStudentMark = (student: CourseStudent, categoryName: string, unitNo: number, totalMarks: number): number => {
+const DEFAULT_CUSTOM_GRADES = [
+  { grade: 'A', percentage: '88% - 100%', points: '4' },
+  { grade: 'B+', percentage: '81% - 87%', points: '3.5' },
+  { grade: 'B', percentage: '74% - 80%', points: '3' },
+  { grade: 'C+', percentage: '67% - 73%', points: '2.5' },
+  { grade: 'C', percentage: '60% - 66%', points: '2' },
+  { grade: 'F', percentage: 'Below 60%', points: '0' },
+];
+
+// Precise score extractor returning 0 by default, dynamically aggregating question marks if defined
+export const getStudentMark = (
+  student: CourseStudent,
+  categoryName: string,
+  unitNo: number,
+  totalMarks: number,
+  unitsData?: Record<string, UnitItem[]>
+): number => {
+  if (unitsData && unitsData[categoryName]) {
+    const matchingUnit = unitsData[categoryName].find(u => u.unitNo === unitNo);
+    if (matchingUnit && matchingUnit.questions && matchingUnit.questions.length > 0) {
+      // Sum question-level marks stored in student.marks as q-${categoryName}-${unitNo}-${questionId}
+      return matchingUnit.questions.reduce((sum, q) => {
+        const qKey = `q-${categoryName}-${unitNo}-${q.id}`;
+        return sum + (student.marks?.[qKey] ?? 0);
+      }, 0);
+    }
+  }
+
   if (student.marks && student.marks[`${categoryName}-${unitNo}`] !== undefined) {
     return student.marks[`${categoryName}-${unitNo}`];
   }
@@ -81,14 +110,12 @@ export const getLetterGrade = (marks: number): string => {
 export function CellInput({
   initialValue,
   totalMarks,
-  passing,
   rowIndex,
   colIndex,
   onSave
 }: {
   initialValue: number;
   totalMarks: number;
-  passing: number;
   rowIndex: number;
   colIndex: number;
   onSave: (val: number) => void;
@@ -173,7 +200,7 @@ export function CellInput({
   };
 
   const currentScore = parseFloat(val) || 0;
-  const isFailed = currentScore < passing || currentScore === 0;
+  const isFailed = currentScore === 0;
 
   return (
     <input
@@ -202,7 +229,12 @@ const INITIAL_CATEGORIES: MarksCategory[] = [
   { name: 'Class Project', percentage: 0, units: 0 },
   { name: 'Presentation', percentage: 0, units: 0 },
   { name: 'Lab Project', percentage: 0, units: 0 },
-  { name: 'Sessionals', percentage: 0, units: 0 },
+  { name: 'Problem Based Learning', percentage: 0, units: 0 },
+  { name: 'Complex Problem', percentage: 0, units: 0 },
+  { name: 'Other Activities', percentage: 0, units: 0 },
+  { name: 'Viva', percentage: 0, units: 0 },
+  { name: 'Lab Performance', percentage: 0, units: 0 },
+  { name: 'Lab Reports', percentage: 0, units: 0 },
   { name: 'Mid Term', percentage: 0, units: 0 },
   { name: 'Final', percentage: 0, units: 0 },
 ];
@@ -210,8 +242,48 @@ const INITIAL_CATEGORIES: MarksCategory[] = [
 const INITIAL_UNITS_DATA: Record<string, UnitItem[]> = {
   'Assignments': [],
   'Quizzes': [],
-  'Sessionals': [],
+  'Class Participation': [],
+  'Class Project': [],
+  'Presentation': [],
+  'Lab Project': [],
+  'Problem Based Learning': [],
+  'Complex Problem': [],
+  'Other Activities': [],
+  'Viva': [],
+  'Lab Performance': [],
+  'Lab Reports': [],
+  'Mid Term': [],
   'Final': [],
+};
+
+const normalizeCourse = (course: InstructorCourse): InstructorCourse => {
+  let updatedCategories = (course.categories || []).filter(c => c.name !== 'Sessionals' && c.name !== 'Sessional');
+
+  INITIAL_CATEGORIES.forEach(initCat => {
+    const exists = updatedCategories.some(c => c.name === initCat.name);
+    if (!exists) {
+      updatedCategories.push({ ...initCat });
+    }
+  });
+
+  const catOrder = INITIAL_CATEGORIES.map(c => c.name);
+  updatedCategories.sort((a, b) => catOrder.indexOf(a.name) - catOrder.indexOf(b.name));
+
+  const updatedUnitsData = { ...(course.unitsData || {}) };
+  delete updatedUnitsData['Sessionals'];
+  delete updatedUnitsData['Sessional'];
+
+  INITIAL_CATEGORIES.forEach(initCat => {
+    if (!updatedUnitsData[initCat.name]) {
+      updatedUnitsData[initCat.name] = [];
+    }
+  });
+
+  return {
+    ...course,
+    categories: updatedCategories,
+    unitsData: updatedUnitsData,
+  };
 };
 
 export const DEPARTMENT_PROGRAMS: Record<string, { id: string; name: string }[]> = {
@@ -252,7 +324,8 @@ const redistributeCategoryUnits = (catUnits: number, currentList: UnitItem[]): U
       unitNo: i + 1,
       passing: existing ? existing.passing : 5,
       totalMarks: existing ? existing.totalMarks : 10,
-      weightage: weights[i]
+      weightage: weights[i],
+      mappedCLOs: existing ? existing.mappedCLOs : []
     });
   }
   return result;
@@ -272,6 +345,8 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
   });
 
   const [selectedObeAssKey, setSelectedObeAssKey] = useState<string>('');
+  const [selectedMarksCategoryName, setSelectedMarksCategoryName] = useState<string>('');
+  const [activeUnitConfigNo, setActiveUnitConfigNo] = useState<number | null>(null);
   const lastActiveCourseIdRef = useRef<string>('');
 
   // Load from API on mount, fallback offline if server not reachable
@@ -282,13 +357,14 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
         const data = await apiService.getInstructorCourses();
         if (active) {
           const filtered = data.filter(c => c.id !== 'course-1' && c.id !== 'course-2');
-          setCourses(filtered);
+          const normalized = filtered.map(normalizeCourse);
+          setCourses(normalized);
           
           // Make sure an active course is selected if none currently chosen
           const savedActive = localStorage.getItem('IQRA_OBE_INSTRUCTOR_ACTIVE_ID');
           if (!savedActive || savedActive === 'course-1' || savedActive === 'course-2') {
-            if (filtered.length > 0) {
-              setActiveCourseId(filtered[0].id);
+            if (normalized.length > 0) {
+              setActiveCourseId(normalized[0].id);
             }
           }
         }
@@ -333,7 +409,10 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
   }, [courses, loading]);
 
   // UI state variables
-  const [activeTab, setActiveTab] = useState<'weightage' | 'edit-items' | 'students' | 'grade' | 'marks-entry' | 'obe'>('weightage');
+  const [activeTab, setActiveTab] = useState<'weightage' | 'edit-items' | 'students' | 'grade' | 'obe' | 'clo' | 'grading-system' | 'enter-marks'>('weightage');
+  const [spreadsheetSearchQuery, setSpreadsheetSearchQuery] = useState<string>('');
+  const [tempCustomGrades, setTempCustomGrades] = useState<{ grade: string; percentage: string; points: string }[] | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error-over' | 'error-under'>('idle');
   const [isAddingCourse, setIsAddingCourse] = useState(false);
   const [courseToDeleteId, setCourseToDeleteId] = useState<string | null>(null);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
@@ -351,6 +430,8 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
   // Warning Modals and Alert triggers
   const [showZeroAlert, setShowZeroAlert] = useState<{ show: boolean; msg: string; category: string } | null>(null);
   const [unitEditingCategory, setUnitEditingCategory] = useState<string | null>(null);
+  const [unitSaveSuccessMsg, setUnitSaveSuccessMsg] = useState<string | null>(null);
+  const [unitCloValidationError, setUnitCloValidationError] = useState<boolean>(false);
 
   // Form states for creating course
   const [addDeptId, setAddDeptId] = useState('computing');
@@ -408,6 +489,28 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
     }
   }, [selectedWeightIndex, tempCategories.length]);
 
+  useEffect(() => {
+    if (saveStatus !== 'success') {
+      setSaveStatus('idle');
+    }
+  }, [tempCategories, selectedWeightIndex, saveStatus]);
+
+  // Sync selectedMarksCategoryName to the first active category if needed
+  useEffect(() => {
+    if (selectedCourse) {
+      const activeCats = selectedCourse.categories.filter(cat => cat.percentage > 0);
+      if (activeCats.length > 0) {
+        if (!selectedMarksCategoryName || !activeCats.some(c => c.name === selectedMarksCategoryName)) {
+          setSelectedMarksCategoryName(activeCats[0].name);
+        }
+      } else {
+        setSelectedMarksCategoryName('');
+      }
+    } else {
+      setSelectedMarksCategoryName('');
+    }
+  }, [selectedCourse, selectedMarksCategoryName]);
+
   const handleWeightPercentChange = (valStr: string) => {
     setEditWeightPercent(valStr);
     const parsed = parseFloat(valStr);
@@ -452,6 +555,10 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
   const [unitTotalMarks, setUnitTotalMarks] = useState<string>('10');
   const [unitPassMarks, setUnitPassMarks] = useState<string>('5');
   const [unitWeightage, setUnitWeightage] = useState<string>('16');
+
+  useEffect(() => {
+    setUnitCloValidationError(false);
+  }, [unitEditingCategory, selectedUnitIndex]);
 
   const handleUnitTotalMarksChange = (valStr: string) => {
     setUnitTotalMarks(valStr);
@@ -507,7 +614,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
     const cat = selectedCourse.categories.find(c => c.name === categoryName);
     if (!cat || cat.percentage === 0 || cat.units === 0) {
       // Pop up the screenshot-accurate Windows error dialog
-      const realMsg = `Percentage is 0 (Zero), cannot add unit item for Marks Distribution ${categoryName}.`;
+      const realMsg = `Number of units is zero, cannot add unit item for Marks Distribution ${categoryName}.`;
       setShowZeroAlert({
         show: true,
         msg: realMsg,
@@ -536,12 +643,18 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
       actualUnits = actualUnits.slice(0, cat.units);
     }
 
-    setTempUnits(actualUnits);
+    const normalizedUnits = actualUnits.map(u => ({
+      ...u,
+      mappedCLOs: u.mappedCLOs || [],
+      questions: u.questions || []
+    }));
+
+    setTempUnits(normalizedUnits);
     setSelectedUnitIndex(0);
-    if (actualUnits[0]) {
-      setUnitTotalMarks(actualUnits[0].totalMarks.toString());
-      setUnitPassMarks(actualUnits[0].passing.toString());
-      setUnitWeightage(actualUnits[0].weightage.toString());
+    if (normalizedUnits[0]) {
+      setUnitTotalMarks(normalizedUnits[0].totalMarks.toString());
+      setUnitPassMarks(normalizedUnits[0].passing.toString());
+      setUnitWeightage(normalizedUnits[0].weightage.toString());
     }
     setUnitEditingCategory(categoryName);
   };
@@ -581,6 +694,12 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
     setQClos([]);
     setEditingQuestionId(null);
   };
+
+  // --- Inline Questions Entry in Enter Marks ---
+  const [inlineQName, setInlineQName] = useState('');
+  const [inlineQMaxMarks, setInlineQMaxMarks] = useState('5');
+  const [inlineQMappedCLOs, setInlineQMappedCLOs] = useState<string[]>([]);
+  const [wizardNumQuestions, setWizardNumQuestions] = useState(4);
 
   const handleSaveObeQuestion = () => {
     if (!selectedCourse) return;
@@ -682,6 +801,71 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
         return {
           ...c,
           obeMarks: copyMarks
+        };
+      }
+      return c;
+    }));
+  };
+
+  const handleSaveQuestionMark = (regNo: string, categoryName: string, unitNo: number, qId: string, value: number) => {
+    if (!selectedCourse) return;
+    
+    setCourses(prev => prev.map(c => {
+      if (c.id === selectedCourse.id) {
+        const updatedStudents = c.students.map(std => {
+          if (std.regNo === regNo) {
+            const nextMarks = { ...(std.marks || {}) };
+            const qKey = `q-${categoryName}-${unitNo}-${qId}`;
+            nextMarks[qKey] = value;
+            
+            // Recompute aggregated unit total
+            const existingUnits = c.unitsData[categoryName] || [];
+            const unit = existingUnits.find(u => u.unitNo === unitNo);
+            if (unit && unit.questions && unit.questions.length > 0) {
+              const uTotal = unit.questions.reduce((sum, q) => {
+                const k = `q-${categoryName}-${unitNo}-${q.id}`;
+                const score = q.id === qId ? value : (nextMarks[k] ?? 0);
+                return sum + score;
+              }, 0);
+              nextMarks[`${categoryName}-${unitNo}`] = uTotal;
+            }
+
+            return {
+              ...std,
+              marks: nextMarks
+            };
+          }
+          return std;
+        });
+
+        return {
+          ...c,
+          students: updatedStudents
+        };
+      }
+      return c;
+    }));
+  };
+
+  const handleSaveUnitDirectMark = (regNo: string, categoryName: string, unitNo: number, value: number) => {
+    if (!selectedCourse) return;
+    
+    setCourses(prev => prev.map(c => {
+      if (c.id === selectedCourse.id) {
+        const updatedStudents = c.students.map(std => {
+          if (std.regNo === regNo) {
+            const nextMarks = { ...(std.marks || {}) };
+            nextMarks[`${categoryName}-${unitNo}`] = value;
+            return {
+              ...std,
+              marks: nextMarks
+            };
+          }
+          return std;
+        });
+        return {
+          ...c,
+          students: updatedStudents
         };
       }
       return c;
@@ -797,10 +981,18 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
 
   const handleSaveAllWeightage = () => {
     if (!selectedCourse) return;
-    if (currentTotalWeight !== 100) {
-      alert(`Invalid parameters: Total weight must exactly sum to 100.00%. Current: ${currentTotalWeight}%`);
+    if (currentTotalWeight > 100) {
+      setSaveStatus('error-over');
+      alert("Please set the total weightage to 100%");
       return;
     }
+    if (currentTotalWeight < 100) {
+      setSaveStatus('error-under');
+      alert("Please set the total weightage to 100%");
+      return;
+    }
+
+    setSaveStatus('success');
 
     setCourses(prev => prev.map(c => {
       if (c.id === selectedCourse.id) {
@@ -821,13 +1013,255 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
     }));
 
     setSuccessMsg('Weightage configuration updated successfully!');
-    setTimeout(() => setSuccessMsg(''), 3000);
+    setTimeout(() => {
+      setSuccessMsg('');
+      setSaveStatus('idle');
+    }, 2000);
   };
 
   const handleResetWeightage = () => {
     if (selectedCourse) {
       setTempCategories(JSON.parse(JSON.stringify(selectedCourse.categories)));
     }
+  };
+
+  // Inline dynamic OBE sub-question handlers for single-assessment Excel spreadsheet sheets
+  const handleAddInlineQuestion = (
+    categoryName: string,
+    unitNo: number,
+    questionName: string,
+    marks: number,
+    mappedCLOs: string[]
+  ) => {
+    if (!selectedCourse) return;
+    setCourses(prev =>
+      prev.map(c => {
+        if (c.code === selectedCourse.code) {
+          const updatedUnitsData = { ...c.unitsData };
+          const existingUnits = updatedUnitsData[categoryName] || [];
+          
+          let unitItem = existingUnits.find(u => u.unitNo === unitNo);
+          if (!unitItem) {
+            unitItem = {
+              unitNo: unitNo,
+              passing: Math.ceil(marks * 0.5),
+              totalMarks: marks,
+              weightage: 100 / (c.categories.find(cat => cat.name === categoryName)?.units || 1),
+              mappedCLOs: mappedCLOs,
+              questions: []
+            };
+          }
+
+          const currentQuestions = unitItem.questions || [];
+          const nextNo = currentQuestions.length + 1;
+          const newQ: UnitQuestion = {
+            id: Date.now().toString() + '_' + nextNo,
+            name: questionName.trim() || `Question ${nextNo}`,
+            maxMarks: marks,
+            mappedCLOs: [...mappedCLOs]
+          };
+
+          const newQuestionsList = [...currentQuestions, newQ];
+          const newTotalMarks = newQuestionsList.reduce((sum, q) => sum + (q.maxMarks || 0), 0);
+          const allMappedCLOs = [...new Set(newQuestionsList.flatMap(q => q.mappedCLOs || []))].sort();
+
+          const updatedUnitItem: UnitItem = {
+            ...unitItem,
+            questions: newQuestionsList,
+            totalMarks: newTotalMarks,
+            mappedCLOs: allMappedCLOs
+          };
+
+          const updatedUnitsList = existingUnits.map(u => u.unitNo === unitNo ? updatedUnitItem : u);
+          if (!existingUnits.some(u => u.unitNo === unitNo)) {
+            updatedUnitsList.push(updatedUnitItem);
+          }
+
+          return {
+            ...c,
+            unitsData: {
+              ...c.unitsData,
+              [categoryName]: updatedUnitsList
+            }
+          };
+        }
+        return c;
+      })
+    );
+  };
+
+  const handleClearInlineQuestions = (categoryName: string, unitNo: number) => {
+    if (!selectedCourse) return;
+    setCourses(prev =>
+      prev.map(c => {
+        if (c.code === selectedCourse.code) {
+          const updatedUnitsData = { ...c.unitsData };
+          const existingUnits = updatedUnitsData[categoryName] || [];
+          const updatedUnitsList = existingUnits.map(u => {
+            if (u.unitNo === unitNo) {
+              return {
+                ...u,
+                questions: [],
+                mappedCLOs: []
+              };
+            }
+            return u;
+          });
+
+          return {
+            ...c,
+            unitsData: {
+              ...c.unitsData,
+              [categoryName]: updatedUnitsList
+            }
+          };
+        }
+        return c;
+      })
+    );
+  };
+
+  const handleWizardPartition = (categoryName: string, unitNo: number, numQuestions: number) => {
+    if (!selectedCourse || numQuestions <= 0) return;
+    setCourses(prev =>
+      prev.map(c => {
+        if (c.code === selectedCourse.code) {
+          const updatedUnitsData = { ...c.unitsData };
+          const existingUnits = updatedUnitsData[categoryName] || [];
+          let unitItem = existingUnits.find(u => u.unitNo === unitNo);
+          
+          const maxUnitValue = unitItem ? unitItem.totalMarks : 10;
+          const share = parseFloat((maxUnitValue / numQuestions).toFixed(1));
+          
+          const newQuestionsList: UnitQuestion[] = [];
+          for (let i = 1; i <= numQuestions; i++) {
+            let qMarks = share;
+            if (i === numQuestions) {
+              const currentSum = parseFloat((share * (numQuestions - 1)).toFixed(1));
+              qMarks = parseFloat((maxUnitValue - currentSum).toFixed(1));
+            }
+
+            newQuestionsList.push({
+              id: `${Date.now().toString()}_w_${i}`,
+              name: `Q${i}`,
+              maxMarks: qMarks,
+              mappedCLOs: ['CLO-1']
+            });
+          }
+
+          const allMappedCLOs = [...new Set(newQuestionsList.flatMap(q => q.mappedCLOs || []))].sort();
+          const updatedUnitItem: UnitItem = {
+            ...(unitItem || {
+              unitNo: unitNo,
+              passing: Math.ceil(maxUnitValue * 0.5),
+              weightage: 100 / (c.categories.find(cat => cat.name === categoryName)?.units || 1),
+            }),
+            questions: newQuestionsList,
+            totalMarks: maxUnitValue,
+            mappedCLOs: allMappedCLOs
+          };
+
+          const updatedUnitsList = existingUnits.map(u => u.unitNo === unitNo ? updatedUnitItem : u);
+          if (!existingUnits.some(u => u.unitNo === unitNo)) {
+            updatedUnitsList.push(updatedUnitItem);
+          }
+
+          return {
+            ...c,
+            unitsData: {
+              ...c.unitsData,
+              [categoryName]: updatedUnitsList
+            }
+          };
+        }
+        return c;
+      })
+    );
+  };
+
+  // Sub-question management for Units
+  const handleAddSubQuestion = () => {
+    setTempUnits(prev => {
+      const copy = [...prev];
+      const unit = copy[selectedUnitIndex];
+      if (unit) {
+        const qList = unit.questions || [];
+        const nextNo = qList.length + 1;
+        const newQuestion: UnitQuestion = {
+          id: Date.now().toString() + '_' + nextNo,
+          name: `Question ${nextNo}`,
+          maxMarks: 5,
+          mappedCLOs: []
+        };
+        
+        const newQuestionList = [...qList, newQuestion];
+        const newTotal = newQuestionList.reduce((sum, q) => sum + (q.maxMarks || 0), 0);
+        const newCLOs = [...new Set(newQuestionList.flatMap(q => q.mappedCLOs || []))].sort();
+
+        copy[selectedUnitIndex] = {
+          ...unit,
+          questions: newQuestionList,
+          totalMarks: newTotal,
+          mappedCLOs: newCLOs
+        };
+        
+        setUnitTotalMarks(newTotal.toString());
+      }
+      return copy;
+    });
+  };
+
+  const handleUpdateSubQuestion = (qId: string, updatedFields: Partial<UnitQuestion>) => {
+    setTempUnits(prev => {
+      const copy = [...prev];
+      const unit = copy[selectedUnitIndex];
+      if (unit) {
+        const qList = unit.questions || [];
+        const newQuestionList = qList.map(q => {
+          if (q.id === qId) {
+            return { ...q, ...updatedFields };
+          }
+          return q;
+        });
+
+        const newTotal = newQuestionList.reduce((sum, q) => sum + (q.maxMarks || 0), 0);
+        const newCLOs = [...new Set(newQuestionList.flatMap(q => q.mappedCLOs || []))].sort();
+
+        copy[selectedUnitIndex] = {
+          ...unit,
+          questions: newQuestionList,
+          totalMarks: newTotal,
+          mappedCLOs: newCLOs
+        };
+
+        setUnitTotalMarks(newTotal.toString());
+      }
+      return copy;
+    });
+  };
+
+  const handleRemoveSubQuestion = (qId: string) => {
+    setTempUnits(prev => {
+      const copy = [...prev];
+      const unit = copy[selectedUnitIndex];
+      if (unit) {
+        const qList = unit.questions || [];
+        const newQuestionList = qList.filter(q => q.id !== qId);
+
+        const newTotal = newQuestionList.reduce((sum, q) => sum + (q.maxMarks || 0), 0);
+        const newCLOs = [...new Set(newQuestionList.flatMap(q => q.mappedCLOs || []))].sort();
+
+        copy[selectedUnitIndex] = {
+          ...unit,
+          questions: newQuestionList,
+          totalMarks: newTotal,
+          mappedCLOs: newCLOs
+        };
+
+        setUnitTotalMarks(newTotal.toString());
+      }
+      return copy;
+    });
   };
 
   // Unit category save/updates
@@ -858,7 +1292,8 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
         unitNo: nextNo,
         passing: 5,
         totalMarks: 10,
-        weightage: 10
+        weightage: 10,
+        mappedCLOs: []
       }
     ]);
     setSelectedUnitIndex(tempUnits.length);
@@ -875,6 +1310,35 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
 
   const handleSaveUnitSettings = () => {
     if (!selectedCourse || !unitEditingCategory) return;
+
+    // Validate that every sub-question in all units has a CLO selected
+    let invalidUnitIdx = -1;
+    for (let i = 0; i < tempUnits.length; i++) {
+      const unit = tempUnits[i];
+      if (unit.questions && unit.questions.length > 0) {
+        const hasUnmapped = unit.questions.some(q => !q.mappedCLOs || q.mappedCLOs.length === 0 || !q.mappedCLOs[0]);
+        if (hasUnmapped) {
+          invalidUnitIdx = i;
+          break;
+        }
+      }
+    }
+
+    if (invalidUnitIdx !== -1) {
+      setSelectedUnitIndex(invalidUnitIdx);
+      setUnitCloValidationError(true);
+      return;
+    }
+
+    // Validate that the total weightage of units is exactly 100%
+    const weightSum = tempUnits.reduce((sum, u) => sum + u.weightage, 0);
+    // Allow a tiny floating-point margin of 0.05% for rounding combinations like 33.3% + 33.3% + 33.4%
+    const isSumValid = Math.abs(weightSum - 100) <= 0.05;
+
+    if (!isSumValid) {
+      alert(`Validation Error: Total weightage sum must be exactly 100% to save! Your current weightage sum is ${weightSum.toFixed(1)}%. Please adjust unit weightages to sum up to exactly 100% before saving.`);
+      return;
+    }
 
     // Dynamically update tempCategories too, so the change appears instantly in the set weightage section
     setTempCategories(prev => prev.map(cat => {
@@ -914,9 +1378,14 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
       return c;
     }));
 
-    setUnitEditingCategory(null);
-    setSuccessMsg(`Units configuration defined for ${unitEditingCategory}`);
-    setTimeout(() => setSuccessMsg(''), 3000);
+    setUnitSaveSuccessMsg(`Marks and Weightages for ${unitEditingCategory} saved successfully!`);
+    
+    setTimeout(() => {
+      setUnitSaveSuccessMsg(null);
+      setUnitEditingCategory(null);
+      setSuccessMsg(`Units configuration defined for ${unitEditingCategory}`);
+      setTimeout(() => setSuccessMsg(''), 3000);
+    }, 1800);
   };
 
   // Students administration
@@ -1219,7 +1688,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
             const weightage = matchingUnit ? matchingUnit.weightage : (100 / cat.units);
             
             totalWeightSum += weightage;
-            const mark = getStudentMark(student, cat.name, u, totalMarks);
+            const mark = getStudentMark(student, cat.name, u, totalMarks, selectedCourse.unitsData);
             if (totalMarks > 0) {
               catSum += (mark / totalMarks) * weightage;
             }
@@ -1263,7 +1732,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
     selectedCourse.students.forEach((std, idx) => {
       const row: string[] = [String(idx + 1), std.regNo, std.name];
       tableColumns.forEach(col => {
-        const markVal = getStudentMark(std, col.categoryName, col.unitNo, col.totalMarks);
+        const markVal = getStudentMark(std, col.categoryName, col.unitNo, col.totalMarks, selectedCourse.unitsData);
         row.push(String(markVal));
       });
       const tMarks = calculateStudentCourseTotal(std);
@@ -1277,7 +1746,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
       const stdCount = selectedCourse.students.length;
       const colAverages = tableColumns.map(col => {
         const sum = selectedCourse.students.reduce((acc, s) => {
-          return acc + getStudentMark(s, col.categoryName, col.unitNo, col.totalMarks);
+          return acc + getStudentMark(s, col.categoryName, col.unitNo, col.totalMarks, selectedCourse.unitsData);
         }, 0);
         return (sum / stdCount).toFixed(2);
       });
@@ -1337,6 +1806,8 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
     }`;
   };
 
+  const showSidebar = activeTab !== 'clo' && activeTab !== 'grading-system' && activeTab !== 'students' && activeTab !== 'grade' && activeTab !== 'enter-marks';
+
   return (
     <div className="min-h-screen flex flex-col font-sans frosted-bg text-slate-800">
       
@@ -1353,10 +1824,10 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
             {/* BACK TO LOGIN */}
             <button
               onClick={onLogout}
-              className={`${getNavbarItemClass(false)} mr-1`}
+              className="px-3.5 py-1.5 text-xs font-sans font-bold rounded-lg cursor-pointer transition-all flex items-center gap-1.5 bg-slate-800 hover:bg-slate-900 hover:scale-[1.02] text-white border border-slate-800 shadow-xs mr-2"
               title="Back to login selection"
             >
-              <ArrowLeft className="w-3.5 h-3.5 text-slate-500" />
+              <ArrowLeft className="w-3.5 h-3.5 text-white shrink-0" />
               <span>Back</span>
             </button>
 
@@ -1445,76 +1916,9 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
               )}
             </div>
 
-            {/* ENTER MARKS SYSTEM */}
-            <div className="relative font-bold">
-              <button
-                onClick={() => { setActiveTab('marks-entry'); setOpenMenu(null); }}
-                className={getNavbarItemClass(activeTab === 'marks-entry')}
-              >
-                <Pencil className="w-3.5 h-3.5" />
-                <span>Enter Marks</span>
-              </button>
-            </div>
 
-            {/* OBE COCKPIT */}
-            <div className="relative font-extrabold text-indigo-950">
-              <button
-                onClick={() => {
-                  setActiveTab('obe');
-                  setOpenMenu(openMenu === 'obe' ? null : 'obe');
-                }}
-                onMouseEnter={() => {
-                  if (openMenu) {
-                    setOpenMenu('obe');
-                  }
-                }}
-                className={getNavbarItemClass(activeTab === 'obe' || openMenu === 'obe')}
-              >
-                <Award className="w-3.5 h-3.5" />
-                <span>OBE Cockpit</span>
-                <ChevronDown className="w-3 h-3 opacity-60" />
-              </button>
-              {openMenu === 'obe' && (
-                <div className="absolute left-0 mt-1 w-64 bg-white border border-slate-300 rounded-lg shadow-xl py-1.5 z-5 z-50 font-sans">
-                  <div className="px-3.5 py-1 text-[9px] text-slate-400 font-bold uppercase tracking-wider font-sans">
-                    OBE Configuration & Analytics
-                  </div>
-                  <button
-                    onClick={() => {
-                      setActiveTab('obe');
-                      setObeSubTab('questions');
-                      setOpenMenu(null);
-                    }}
-                    className={`w-full text-left px-3.5 py-2 text-xs hover:bg-indigo-50 hover:text-indigo-950 flex items-center gap-2 rounded-md focus:outline-none font-semibold ${obeSubTab === 'questions' && activeTab === 'obe' ? 'bg-indigo-50 text-indigo-950 font-extrabold border-l-2 border-indigo-600 pl-3' : 'text-slate-700'}`}
-                  >
-                    <ClipboardList className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                    <span>Questions Mapping</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      setActiveTab('obe');
-                      setObeSubTab('marks');
-                      setOpenMenu(null);
-                    }}
-                    className={`w-full text-left px-3.5 py-2 text-xs hover:bg-indigo-50 hover:text-indigo-950 flex items-center gap-2 rounded-md focus:outline-none font-semibold ${obeSubTab === 'marks' && activeTab === 'obe' ? 'bg-indigo-50 text-indigo-950 font-extrabold border-l-2 border-indigo-600 pl-3' : 'text-slate-700'}`}
-                  >
-                    <Pencil className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                    <span>OBE Marks Entry</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      setActiveTab('obe');
-                      setObeSubTab('reports');
-                      setOpenMenu(null);
-                    }}
-                    className={`w-full text-left px-3.5 py-2 text-xs hover:bg-indigo-50 hover:text-indigo-950 flex items-center gap-2 rounded-md focus:outline-none font-semibold ${obeSubTab === 'reports' && activeTab === 'obe' ? 'bg-indigo-50 text-indigo-950 font-extrabold border-l-2 border-indigo-600 pl-3' : 'text-slate-700'}`}
-                  >
-                    <FileText className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                    <span>CLO Reports & Analytics</span>
-                  </button>
-                </div>
-              )}
-            </div>
+
+
 
             {/* REGISTERED ROSTER */}
             <div className="relative">
@@ -1524,6 +1928,75 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
               >
                 <Users className="w-3.5 h-3.5" />
                 <span>Add Student</span>
+              </button>
+            </div>
+
+            {/* ENTER MARKS BUTTON */}
+            <div className="relative">
+              <button
+                onClick={() => {
+                  setActiveTab('enter-marks');
+                  setOpenMenu(openMenu === 'enter-marks' ? null : 'enter-marks');
+                }}
+                onMouseEnter={() => {
+                  if (openMenu) {
+                    setOpenMenu('enter-marks');
+                    setActiveTab('enter-marks');
+                  }
+                }}
+                className={getNavbarItemClass(openMenu === 'enter-marks' || activeTab === 'enter-marks')}
+              >
+                <ClipboardCheck className="w-3.5 h-3.5 text-indigo-500" />
+                <span className="font-bold">Enter Marks</span>
+                <ChevronDown className="w-3 h-3 opacity-60" />
+              </button>
+              {openMenu === 'enter-marks' && selectedCourse && (
+                <div className="absolute left-0 mt-1 w-64 bg-white border border-slate-300 rounded-lg shadow-xl py-1 z-50 max-h-96 overflow-y-auto font-sans">
+                  <div className="px-3.5 py-1 text-[9px] text-slate-400 font-bold uppercase tracking-wider font-sans">
+                    Assessment Components
+                  </div>
+                  {selectedCourse.categories.filter(cat => cat.percentage > 0).map(cat => (
+                    <button
+                      key={cat.name}
+                      onClick={() => {
+                        setSelectedMarksCategoryName(cat.name);
+                        setActiveTab('enter-marks');
+                        setOpenMenu(null);
+                      }}
+                      className="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-indigo-50 hover:text-indigo-950 flex items-center gap-2 rounded focus:outline-none font-medium"
+                    >
+                      <BookOpen className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                      <span>{cat.name}</span>
+                    </button>
+                  ))}
+                  {selectedCourse.categories.filter(cat => cat.percentage > 0).length === 0 && (
+                    <div className="px-3.5 py-2 text-xs text-slate-400 italic">
+                      No active components configured
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* CLO */}
+            <div className="relative">
+              <button
+                onClick={() => { setActiveTab('clo'); setOpenMenu(null); }}
+                className={getNavbarItemClass(activeTab === 'clo')}
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                <span>CLO</span>
+              </button>
+            </div>
+
+            {/* GRADE */}
+            <div className="relative">
+              <button
+                onClick={() => { setActiveTab('grading-system'); setOpenMenu(null); }}
+                className={getNavbarItemClass(activeTab === 'grading-system')}
+              >
+                <Award className="w-3.5 h-3.5" />
+                <span>Grade</span>
               </button>
             </div>
 
@@ -1591,9 +2064,6 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
           <div className="flex flex-col items-end gap-0.5">
             <span className="text-[10px] text-slate-500 font-mono tracking-tight font-semibold hidden sm:inline">
               User: <strong className="text-indigo-950 font-extrabold">{selectedCourse ? selectedCourse.departmentName : 'Department of Computing and Technology'} Instructor</strong>
-            </span>
-            <span className="text-[9px] text-indigo-600 font-mono font-bold tracking-tight hidden md:inline bg-indigo-50 border border-indigo-100/50 px-2 py-0.5 rounded">
-              ResultMate Software Suite v4.6 Integration Sandbox
             </span>
           </div>
 
@@ -1666,7 +2136,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
       {/* MAIN LAYOUT CANVAS */}
       <main className="grow max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 flex flex-col gap-6">
         
-        {successMsg && (
+        {successMsg && successMsg !== 'Weightage configuration updated successfully!' && (
           <div className="bg-emerald-900/30 border border-emerald-500/40 text-emerald-300 px-4 py-3 rounded-lg flex items-center gap-3 animate-in fade-in duration-200 text-sm">
             <Check className="w-5 h-5 text-emerald-400 shrink-0" />
             <span>{successMsg}</span>
@@ -1692,7 +2162,8 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start font-sans">
             
             {/* LEFT COLUMN: ACTIVE COURSE BOARD WITH DEPARTMENT GROUPING & SWITCHING & EASY EDIT/DELETE */}
-            <div className="lg:col-span-4 bg-white border border-slate-200/80 rounded-2xl p-4 sm:p-5 shadow-sm space-y-5">
+            {showSidebar && (
+              <div className="lg:col-span-4 bg-white border border-slate-200/80 rounded-2xl p-4 sm:p-5 shadow-sm space-y-5">
               <div>
                 <h3 className="text-xs font-bold text-slate-900 tracking-wider uppercase flex items-center gap-2">
                   <Building className="w-4 h-4 text-indigo-600 shrink-0" />
@@ -1870,21 +2341,13 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                 <span>Define Course Specification</span>
               </button>
 
-              {/* ASSESSMENT DESIGN PRINCIPLE (moved to sidebar) */}
-              <div className="bg-indigo-50/55 border border-indigo-100/80 rounded-xl p-4 text-xs text-slate-600 mt-4 shadow-2xs">
-                <h4 className="font-semibold text-slate-850 mb-1.5 flex items-center gap-1.5 font-sans">
-                  <Info className="w-4 h-4 text-indigo-600 shrink-0" />
-                  Assessment Design Principle
-                </h4>
-                <p className="text-[11px] leading-relaxed font-sans text-slate-600">
-                  Each individual unit item can store unique Passing Marks and Total Marks thresholds separate from one another. This allows you to construct modular, complex scorecards where student achievements are evaluated dynamically against course objectives.
-                </p>
-              </div>
+
 
             </div>
+            )}
 
             {/* RIGHT COLUMN: MAIN OUTCOME ASSESSMENT INTERFACES */}
-            <div className="lg:col-span-8 space-y-6">
+            <div className={`${showSidebar ? 'lg:col-span-8' : 'lg:col-span-12'} space-y-6`}>
               
               {selectedCourse ? (
                 <>
@@ -1895,32 +2358,15 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                         <BookOpenCheck className="w-5 h-5 text-indigo-600" />
                         {selectedCourse.code} — {selectedCourse.title}
                       </h2>
-                      <p className="text-xs text-slate-500 font-sans mt-0.5">
-                        ResultMate evaluation engine is currently running course outcome assessments.
-                      </p>
-                    </div>
-                    <div className="text-xs font-mono font-bold text-slate-655 bg-slate-100 border border-slate-205 rounded px-3 py-1">
-                      Assessing {selectedCourse.students.length} enrolled students.
                     </div>
                   </div>
 
                   {/* TAB PANES */}
                   <div className="bg-white/85 border border-slate-200/80 backdrop-blur-md rounded-2xl p-4 sm:p-6 shadow-md text-slate-800">
-                     {/* TAB 1: SET WEIGHTAGE */}
-              {activeTab === 'weightage' && selectedCourse && (
-                <div className="space-y-4">
-                  
-                  <div>
-                    <h3 className="text-base font-bold text-slate-900 flex items-center gap-1.5">
-                      <Sliders className="w-4 h-4 text-indigo-600" />
-                      Set Marks distribution Weightage
-                    </h3>
-                    <p className="text-xs text-slate-600 mt-1">
-                      Set total distribution percentages for each criteria. Total must sum up to exactly <strong className="text-indigo-950">100.00%</strong>. Use the control on the right to make real-time adjustments.
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+                    {/* TAB 1: SET WEIGHTAGE */}
+                    {activeTab === 'weightage' && selectedCourse && (
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
                     {/* Weightage Data Grid left column */}
                     <div className="lg:col-span-7 border border-slate-200 rounded-xl overflow-hidden bg-white shadow-xs">
                       <div className="overflow-x-auto">
@@ -2053,24 +2499,62 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                   </div>
 
                   {/* Submission and reset actions */}
-                  <div className="flex items-center justify-between gap-4 pt-4 border-t border-slate-200">
-                    <p className="text-[11px] text-slate-500 font-sans">
-                      Changes above require selecting <strong className="font-bold">Ok</strong> to finalize.
-                    </p>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={handleResetWeightage}
-                        className="px-4 py-1.5 hover:bg-slate-100 border border-slate-300 text-slate-700 text-xs font-semibold rounded-lg transition-colors"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={handleSaveAllWeightage}
-                        className="px-5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-md flex items-center gap-1.5 transition-colors"
-                      >
-                        <Save className="w-3.5 h-3.5" />
-                        Ok
-                      </button>
+                  <div className="pt-4 border-t border-slate-200 space-y-3">
+                    {saveStatus === 'error-over' && (
+                      <div className="bg-rose-50 border border-rose-200 text-rose-700 px-4 py-2.5 rounded-xl flex items-center gap-2 text-xs font-sans shadow-2xs">
+                        <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <div>
+                          <span className="font-bold">Error:</span> Total weightage must be exactly 100%. Currently it is <strong className="font-mono">{currentTotalWeight.toFixed(2)}%</strong> (which is greater than 100%). Please set the total weightage to 100%.
+                        </div>
+                      </div>
+                    )}
+                    {saveStatus === 'error-under' && (
+                      <div className="bg-rose-50 border border-rose-200 text-rose-700 px-4 py-2.5 rounded-xl flex items-center gap-2 text-xs font-sans shadow-2xs">
+                        <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <div>
+                          <span className="font-bold">Error:</span> Total weightage must be exactly 100%. Currently it is <strong className="font-mono">{currentTotalWeight.toFixed(2)}%</strong> (which is less than 100%). Please set the total weightage to 100%.
+                        </div>
+                      </div>
+                    )}
+                    {saveStatus === 'success' && (
+                      <div className="bg-emerald-50 border border-emerald-300 border-l-4 border-l-emerald-600 p-3.5 rounded-xl flex items-start gap-3 shadow-2xs animate-fade-in text-xs font-sans">
+                        <Check className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                        <div>
+                          <h4 className="text-xs font-extrabold text-emerald-950 uppercase tracking-wider">Saved Successfully</h4>
+                          <p className="text-[11px] text-emerald-850 mt-1 font-sans font-medium">
+                            Weightage configuration updated successfully!
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between gap-4">
+                      <p className="text-[11px] text-slate-500 font-sans">
+                        Changes above require selecting <strong className="font-bold">Ok</strong> to finalize.
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={handleResetWeightage}
+                          className="px-4 py-1.5 hover:bg-slate-100 border border-slate-300 text-slate-700 text-xs font-semibold rounded-lg transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={handleSaveAllWeightage}
+                          className={`px-5 py-1.5 text-white text-xs font-bold rounded-lg shadow-md flex items-center gap-1.5 transition-all ${
+                            saveStatus === 'success'
+                              ? 'bg-emerald-600 hover:bg-emerald-700 font-extrabold px-6 scale-105'
+                              : saveStatus === 'error-over'
+                              ? 'bg-rose-600 hover:bg-rose-700 scale-105'
+                              : saveStatus === 'error-under'
+                              ? 'bg-rose-600 hover:bg-rose-700 scale-105'
+                              : 'bg-indigo-600 hover:bg-indigo-700'
+                          }`}
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          Ok
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -2087,7 +2571,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                       Configure Category Unit Marks Details
                     </h3>
                     <p className="text-xs text-slate-600 mt-1">
-                      Choose an assessment item below to adjust each individual unit's passing thresholds and relative weights. Items set to 0% cannot have unit configs.
+                      Choose an assessment item below to adjust each individual unit's total marks and relative weights. Items set to 0% cannot have unit configs.
                     </p>
                   </div>
 
@@ -2136,21 +2620,6 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
               {activeTab === 'students' && selectedCourse && (
                 <div className="space-y-6">
                   
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div>
-                      <h3 className="text-base font-bold text-slate-900 flex items-center gap-1.5">
-                        <Users className="w-4 h-4 text-indigo-600" />
-                        Add Student
-                      </h3>
-                      <p className="text-xs text-slate-600 mt-1">
-                        Define students enrolled in this course specification. Enrollment requires the <strong className="text-indigo-950 font-bold">registration number</strong> as the unique identifier.
-                      </p>
-                    </div>
-
-                    <div className="text-xs bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-200 font-mono text-indigo-700 font-bold self-start sm:self-auto shadow-xs">
-                      Total Course Strengths: {selectedCourse.students.length} Enrolled
-                    </div>
-                  </div>
 
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                     
@@ -2426,7 +2895,401 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
               </div>
             )}
 
-              {/* TAB 4: GRADE SHEETS */}
+            {/* TAB: CLO SPECIFICATION */}
+            {activeTab === 'clo' && selectedCourse && (
+              <div id="clo-setup-view" className="space-y-6 animate-fadeIn">
+                <div className="bg-[#f8fafc] border-b border-slate-200 pb-4">
+                  <span className="text-[10px] text-indigo-600 font-extrabold uppercase tracking-widest bg-indigo-50 px-2 py-0.5 rounded border border-indigo-150">Course Learning Outcomes</span>
+                  <h3 className="text-base font-extrabold text-slate-900 mt-1 flex items-center gap-1.5 font-sans">
+                    <Sliders className="w-4 h-4 text-indigo-600" />
+                    CLO Setup & Management
+                  </h3>
+                  <p className="text-xs text-slate-600 mt-1">
+                    Configure the exact number of active Course Learning Outcomes (CLOs) for {selectedCourse.code}. This will dynamically adjust the mapping checklists throughout the portal.
+                  </p>
+                </div>
+
+                <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-xs space-y-4">
+                  <div className="space-y-2">
+                    <label className="block text-xs font-bold font-sans text-slate-700">
+                      Total Number of CLOs for {selectedCourse.code} — {selectedCourse.title}
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        id="clo-count-input"
+                        type="number"
+                        min="1"
+                        max="20"
+                        defaultValue={selectedCourse.cloCount || 4}
+                        className="bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-950 w-32 font-mono outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                      />
+                      <button
+                        onClick={() => {
+                          const inputVal = (document.getElementById('clo-count-input') as HTMLInputElement)?.value;
+                          const newCount = parseInt(inputVal) || 4;
+                          if (newCount < 1 || newCount > 20) {
+                            alert("Please enter a valid number of CLOs between 1 and 20.");
+                            return;
+                          }
+                          // Save to courses state
+                          setCourses(prev => prev.map(c => {
+                            if (c.id === selectedCourse.id) {
+                              return { ...c, cloCount: newCount };
+                            }
+                            return c;
+                          }));
+                          setSaveStatus('success');
+                          setTimeout(() => setSaveStatus('idle'), 3000);
+                        }}
+                        className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg transition-colors shadow-xs cursor-pointer flex items-center gap-1.5 font-sans"
+                      >
+                        <Save className="w-3.5 h-3.5" />
+                        Save CLOs
+                      </button>
+                    </div>
+                  </div>
+
+                  {saveStatus === 'success' && (
+                    <div className="bg-emerald-50 border border-emerald-250 text-emerald-700 px-4 py-2.5 rounded-lg flex items-center gap-2 text-xs font-sans shadow-2xs">
+                      <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <div>
+                        <span className="font-bold">Success:</span> Saved {selectedCourse.cloCount || 4} CLO components for this course successfully!
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="pt-4 border-t border-slate-100">
+                    <h4 className="text-xs font-bold text-slate-700 mb-2.5 font-sans">
+                      Active Course Outcomes List:
+                    </h4>
+                    <div className="flex flex-wrap gap-2">
+                      {Array.from({ length: selectedCourse.cloCount || 4 }, (_, idx) => (
+                        <div 
+                          key={idx}
+                          className="bg-indigo-50 border border-indigo-200 text-indigo-700 px-3 py-1.5 rounded-lg text-xs font-bold font-mono shadow-3xs flex items-center gap-1.5"
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-500"></span>
+                          CLO-{idx + 1}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB: GRADING SYSTEM SETUP */}
+            {activeTab === 'grading-system' && selectedCourse && (
+              <div id="grading-system-view" className="space-y-6 animate-fadeIn">
+                <div className="bg-[#f8fafc] border-b border-slate-200 pb-4">
+                  <span className="text-[10px] text-indigo-600 font-extrabold uppercase tracking-widest bg-indigo-50 px-2 py-0.5 rounded border border-indigo-150">Grading Configuration</span>
+                  <h3 className="text-base font-extrabold text-slate-900 mt-1 flex items-center gap-1.5 font-sans">
+                    <Award className="w-4 h-4 text-indigo-600" />
+                    Course Grading System Setup
+                  </h3>
+                  <p className="text-xs text-slate-600 mt-1">
+                    Configure and select the active evaluation scheme. Select a standard ready-made template or build a customized grading structure below.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 p-3.5 rounded-xl">
+                  <span className="text-xs font-bold text-slate-550 font-sans">Evaluated Selection for {selectedCourse.code}:</span>
+                  <span className="px-3 py-1 bg-indigo-600 text-white text-xs font-black rounded-lg uppercase tracking-wider font-sans">
+                    {selectedCourse.selectedGradingSystem === 'ready2' 
+                      ? 'Plus/Minus System' 
+                      : selectedCourse.selectedGradingSystem === 'custom' 
+                      ? 'Custom Editable' 
+                      : 'Iqra Standard'}
+                  </span>
+                </div>
+
+                {/* Radio Cards to Select Active Grading System */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+                  {/* CARD 1: IQRA STANDARD */}
+                  <div 
+                    onClick={() => {
+                      setCourses(prev => prev.map(c => {
+                        if (c.id === selectedCourse.id) {
+                          return { ...c, selectedGradingSystem: 'ready1' };
+                        }
+                        return c;
+                      }));
+                    }}
+                    className={`p-5 rounded-2xl border transition-all cursor-pointer relative flex flex-col justify-between ${
+                      (selectedCourse.selectedGradingSystem || 'ready1') === 'ready1'
+                        ? 'border-indigo-600 bg-white ring-2 ring-indigo-500/20 shadow-md'
+                        : 'border-slate-200 bg-slate-50/50 hover:bg-white hover:border-slate-350 shadow-3xs'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="text-sm font-bold text-slate-900 font-sans flex items-center gap-2">
+                          <span className={`w-3.5 h-3.5 rounded-full border-4 flex items-center justify-center shrink-0 ${
+                            (selectedCourse.selectedGradingSystem || 'ready1') === 'ready1' ? 'border-indigo-550 bg-white' : 'border-slate-300'
+                          }`} />
+                          System 1: Iqra Standard
+                        </h4>
+                        <span className="text-[10px] uppercase font-black tracking-widest text-[#1e293b] font-mono bg-slate-100 px-1.5 py-0.5 rounded border border-slate-250 font-sans">Ready-Made</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mb-4 font-sans">
+                        A 6-tier grading table with traditional brackets, including custom incomplete/withdrawal tags.
+                      </p>
+
+                      <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
+                        <table className="w-full text-left text-[11px] font-sans">
+                          <thead className="bg-[#f8fafc] border-b border-slate-200 font-bold text-slate-500 font-mono">
+                            <tr>
+                              <th className="py-1 px-3">Grade</th>
+                              <th className="py-1 px-3 text-center">Percentage</th>
+                              <th className="py-1 px-3 text-right">Points</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 font-medium text-slate-700 font-mono">
+                            {[
+                              { grade: 'A', percentage: '88% - 100%', points: '4' },
+                              { grade: 'B+', percentage: '81% - 87%', points: '3.5' },
+                              { grade: 'B', percentage: '74% - 80%', points: '3' },
+                              { grade: 'C+', percentage: '67% - 73%', points: '2.5' },
+                              { grade: 'C', percentage: '60% - 66%', points: '2' },
+                              { grade: 'F', percentage: 'Below 60%', points: '0' },
+                              { grade: 'I', percentage: '-', points: '-' },
+                              { grade: 'W', percentage: '-', points: '-' }
+                            ].map((row, idx) => (
+                              <tr key={idx} className="hover:bg-slate-50/40">
+                                <td className="py-1.5 px-3 font-extrabold text-indigo-700 font-sans">{row.grade}</td>
+                                <td className="py-1.5 px-3 text-center">{row.percentage}</td>
+                                <td className="py-1.5 px-3 text-right font-bold text-slate-900">{row.points}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                    <div className="mt-4">
+                      <button className={`w-full py-2 px-3 text-xs font-bold rounded-xl transition-all font-sans cursor-pointer ${
+                        (selectedCourse.selectedGradingSystem || 'ready1') === 'ready1'
+                          ? 'bg-indigo-600 text-white cursor-default shadow-xs'
+                          : 'bg-slate-100 text-slate-700 hover:bg-indigo-50 border border-slate-200'
+                      }`}>
+                        {(selectedCourse.selectedGradingSystem || 'ready1') === 'ready1' ? 'Active System' : 'Activate This Template'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* CARD 2: PLUS/MINUS STANDARD */}
+                  <div 
+                    onClick={() => {
+                      setCourses(prev => prev.map(c => {
+                        if (c.id === selectedCourse.id) {
+                          return { ...c, selectedGradingSystem: 'ready2' };
+                        }
+                        return c;
+                      }));
+                    }}
+                    className={`p-5 rounded-2xl border transition-all cursor-pointer relative flex flex-col justify-between ${
+                      selectedCourse.selectedGradingSystem === 'ready2'
+                        ? 'border-indigo-600 bg-white ring-2 ring-indigo-500/20 shadow-md'
+                        : 'border-slate-200 bg-slate-50/50 hover:bg-white hover:border-slate-350 shadow-3xs'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="text-sm font-bold text-slate-900 font-sans flex items-center gap-2">
+                          <span className={`w-3.5 h-3.5 rounded-full border-4 flex items-center justify-center shrink-0 ${
+                            selectedCourse.selectedGradingSystem === 'ready2' ? 'border-indigo-550 bg-white' : 'border-slate-300'
+                          }`} />
+                          System 2: Plus/Minus
+                        </h4>
+                        <span className="text-[10px] uppercase font-black tracking-widest text-[#1e293b] font-mono bg-slate-100 px-1.5 py-0.5 rounded border border-slate-250 font-sans">Ready-Made</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mb-4 font-sans">
+                        A 10-tier breakdown using fractional points (A+, A, A-, B+, B, B-, etc.) for finer grain performance scaling.
+                      </p>
+
+                      <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
+                        <table className="w-full text-left text-[11px] font-sans">
+                          <thead className="bg-[#f8fafc] border-b border-slate-200 font-bold text-slate-500 font-mono">
+                            <tr>
+                              <th className="py-1 px-3">Grade</th>
+                              <th className="py-1 px-3 text-center">Percentage</th>
+                              <th className="py-1 px-3 text-right">Points</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 font-medium text-slate-700 font-mono">
+                            {[
+                              { grade: 'A+', percentage: '90% - 100%', points: '4.0' },
+                              { grade: 'A', percentage: '85% - 89%', points: '4.0' },
+                              { grade: 'A-', percentage: '80% - 84%', points: '3.7' },
+                              { grade: 'B+', percentage: '75% - 79%', points: '3.3' },
+                              { grade: 'B', percentage: '70% - 74%', points: '3.0' },
+                              { grade: 'B-', percentage: '65% - 69%', points: '2.7' },
+                              { grade: 'C+', percentage: '60% - 64%', points: '2.3' },
+                              { grade: 'C', percentage: '55% - 59%', points: '2.0' },
+                              { grade: 'D', percentage: '50% - 54%', points: '1.0' },
+                              { grade: 'F', percentage: 'Below 50%', points: '0.0' }
+                            ].map((row, idx) => (
+                              <tr key={idx} className="hover:bg-slate-50/40">
+                                <td className="py-1 px-3 font-extrabold text-indigo-700 font-sans">{row.grade}</td>
+                                <td className="py-1 px-3 text-center">{row.percentage}</td>
+                                <td className="py-1 px-3 text-right font-bold text-slate-900">{row.points}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                    <div className="mt-4">
+                      <button className={`w-full py-2 px-3 text-xs font-bold rounded-xl transition-all font-sans cursor-pointer ${
+                        selectedCourse.selectedGradingSystem === 'ready2'
+                          ? 'bg-indigo-600 text-white cursor-default shadow-xs'
+                          : 'bg-slate-100 text-slate-700 hover:bg-indigo-50 border border-slate-200'
+                      }`}>
+                        {selectedCourse.selectedGradingSystem === 'ready2' ? 'Active System' : 'Activate This Template'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* CARD 3: EDITABLE CUSTOM GRADING SYSTEM */}
+                  <div 
+                    className={`p-5 rounded-2xl border transition-all relative flex flex-col justify-between ${
+                      selectedCourse.selectedGradingSystem === 'custom'
+                        ? 'border-indigo-600 bg-white ring-2 ring-indigo-500/20 shadow-md'
+                        : 'border-slate-200 bg-slate-50/50 shadow-3xs'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 
+                          onClick={() => {
+                            setCourses(prev => prev.map(c => {
+                              if (c.id === selectedCourse.id) {
+                                return { ...c, selectedGradingSystem: 'custom' };
+                              }
+                              return c;
+                            }));
+                          }}
+                          className="text-sm font-bold text-slate-900 font-sans flex items-center gap-2 cursor-pointer select-none"
+                        >
+                          <span className={`w-3.5 h-3.5 rounded-full border-4 flex items-center justify-center shrink-0 ${
+                            selectedCourse.selectedGradingSystem === 'custom' ? 'border-indigo-550 bg-white' : 'border-slate-300'
+                          }`} />
+                          System 3: Custom Editable Desk
+                        </h4>
+                        <span className="text-[10px] uppercase font-black tracking-widest text-[#b45309] font-mono bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 font-sans">Dynamic</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mb-4 font-sans">
+                        Build and manage your custom local grading tiers. Select this item, modify any record below, and save changes.
+                      </p>
+
+                      <div className="max-h-[350px] overflow-y-auto border border-slate-200 rounded-lg bg-white p-2 space-y-2">
+                        {(tempCustomGrades || selectedCourse.customGradingSystem || DEFAULT_CUSTOM_GRADES).map((row, idx) => (
+                          <div key={idx} className="flex items-center gap-1.5 p-1.5 bg-slate-50 rounded-lg border border-slate-100">
+                            <input 
+                              type="text"
+                              value={row.grade}
+                              onChange={(e) => {
+                                const list = JSON.parse(JSON.stringify(tempCustomGrades || selectedCourse.customGradingSystem || DEFAULT_CUSTOM_GRADES));
+                                list[idx].grade = e.target.value;
+                                setTempCustomGrades(list);
+                              }}
+                              className="w-10 text-xs font-bold text-indigo-700 bg-white border border-slate-300 rounded px-1.5 py-0.5 text-center font-mono outline-none focus:border-indigo-500"
+                              placeholder="G"
+                            />
+                            <input 
+                              type="text"
+                              value={row.percentage}
+                              onChange={(e) => {
+                                const list = JSON.parse(JSON.stringify(tempCustomGrades || selectedCourse.customGradingSystem || DEFAULT_CUSTOM_GRADES));
+                                list[idx].percentage = e.target.value;
+                                setTempCustomGrades(list);
+                              }}
+                              className="flex-1 text-xs text-center text-slate-800 bg-white border border-slate-300 rounded px-1.5 py-0.5 font-mono outline-none focus:border-indigo-500"
+                              placeholder="e.g. 80% - 84%"
+                            />
+                            <input 
+                              type="text"
+                              value={row.points}
+                              onChange={(e) => {
+                                const list = JSON.parse(JSON.stringify(tempCustomGrades || selectedCourse.customGradingSystem || DEFAULT_CUSTOM_GRADES));
+                                list[idx].points = e.target.value;
+                                setTempCustomGrades(list);
+                              }}
+                              className="w-12 text-xs text-center font-bold text-slate-900 bg-white border border-slate-300 rounded px-1.5 py-0.5 font-mono outline-none focus:border-indigo-500"
+                              placeholder="4.0"
+                            />
+                            <button
+                              onClick={() => {
+                                const list = JSON.parse(JSON.stringify(tempCustomGrades || selectedCourse.customGradingSystem || DEFAULT_CUSTOM_GRADES));
+                                list.splice(idx, 1);
+                                setTempCustomGrades(list);
+                              }}
+                              className="p-1 hover:bg-rose-100 rounded text-rose-500 transition-colors cursor-pointer"
+                            >
+                              <Trash className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+
+                        <button
+                          onClick={() => {
+                            const list = JSON.parse(JSON.stringify(tempCustomGrades || selectedCourse.customGradingSystem || DEFAULT_CUSTOM_GRADES));
+                            list.push({ grade: 'New', percentage: '0% - 0%', points: '0' });
+                            setTempCustomGrades(list);
+                          }}
+                          className="w-full py-1.5 border border-dashed border-indigo-300 hover:border-indigo-500 text-indigo-600 hover:bg-indigo-50/50 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all cursor-pointer font-sans"
+                        >
+                          <Plus className="w-3.5 h-3.5 animate-pulse" />
+                          Add Grade Tier
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 space-y-2">
+                      <button 
+                        onClick={() => {
+                          const list = tempCustomGrades || selectedCourse.customGradingSystem || DEFAULT_CUSTOM_GRADES;
+                          setCourses(prev => prev.map(c => {
+                            if (c.id === selectedCourse.id) {
+                              return { ...c, selectedGradingSystem: 'custom', customGradingSystem: list };
+                            }
+                            return c;
+                          }));
+                          setTempCustomGrades(null);
+                          setSaveStatus('success');
+                          setTimeout(() => setSaveStatus('idle'), 3000);
+                        }}
+                        className="w-full py-2 px-3 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer font-sans"
+                      >
+                        <Save className="w-3.5 h-3.5" />
+                        Save Custom Changes
+                      </button>
+
+                      <button 
+                        onClick={() => {
+                          setCourses(prev => prev.map(c => {
+                            if (c.id === selectedCourse.id) {
+                              return { ...c, selectedGradingSystem: 'custom' };
+                            }
+                            return c;
+                          }));
+                        }}
+                        className={`w-full py-1.5 px-3 text-xs font-bold rounded-xl transition-all font-sans cursor-pointer ${
+                          selectedCourse.selectedGradingSystem === 'custom'
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-100 cursor-default'
+                            : 'bg-slate-100 text-slate-700 hover:bg-indigo-50 border border-slate-200'
+                        }`}
+                      >
+                        {selectedCourse.selectedGradingSystem === 'custom' ? 'Active System' : 'Activate Custom System'}
+                      </button>
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+            )}
+
+            {/* TAB 4: GRADE SHEETS */}
               {activeTab === 'grade' && selectedCourse && (
                 <div className="space-y-6">
                   
@@ -2481,7 +3344,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                                   const weightage = matchingUnit ? matchingUnit.weightage : (100 / cat.units);
                                   
                                   totalWeightSum += weightage;
-                                  const mark = getStudentMark(std, cat.name, u, totalMarks);
+                                  const mark = getStudentMark(std, cat.name, u, totalMarks, selectedCourse.unitsData);
                                   if (totalMarks > 0) {
                                     catSum += (mark / totalMarks) * weightage;
                                   }
@@ -2530,174 +3393,1054 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                 </div>
               )}
 
-              {/* TAB 5: MARKS ENTRY LEDGER */}
-              {activeTab === 'marks-entry' && selectedCourse && (
+
+                      {/* TAB 5: Master Excel-like spreadsheet marks entry */}
+              {activeTab === 'enter-marks' && selectedCourse && (
                 <div className="space-y-6">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div>
-                      <h3 className="text-base font-bold text-[#1e4e79] flex items-center gap-2">
-                        <FileSpreadsheet className="w-5 h-5 text-indigo-600 shrink-0" />
-                        Outcome Assessment Marks Entry Ledger
-                      </h3>
-                      <p className="text-xs text-slate-600 mt-1">
-                        Interact directly with cells to input and modify student achievements. Click any cell, type, and press <kbd className="bg-slate-100 px-1 border border-slate-300 rounded text-[9px] font-mono">Enter</kbd> or click away to save.
-                      </p>
-                    </div>
+                  {/* SPLIT_PRE */}
+                  <MarksEntrySpreadsheet
+                    selectedCourse={selectedCourse}
+                    setCourses={setCourses}
+                    selectedCategoryName={selectedMarksCategoryName}
+                    setSelectedCategoryName={setSelectedMarksCategoryName}
+                    handleSaveQuestionMark={handleSaveQuestionMark}
+                    handleSaveUnitDirectMark={handleSaveUnitDirectMark}
+                    handleAddInlineQuestion={handleAddInlineQuestion}
+                    handleWizardPartition={handleWizardPartition}
+                    handleClearInlineQuestions={handleClearInlineQuestions}
+                  />
 
-                    <div className="flex gap-2">
-                      <button
-                        onClick={handleExportCourseSheet}
-                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
-                      >
-                        <FileSpreadsheet className="w-3.5 h-3.5" />
-                        Export Sheet
-                      </button>
-                    </div>
-                  </div>
+                  {false && (() => {
+                    // Generate full list of assessments
+                    const assessmentsList: { 
+                      categoryName: string; 
+                      unitNo: number; 
+                      key: string; 
+                      label: string; 
+                      maxMarks: number; 
+                      weightage: number; 
+                      questionsCount: number; 
+                      gradedCount: number;
+                    }[] = [];
 
-                  {/* ROYAL-BLUE MINI INFO BAR BANNER */}
-                  <div className="bg-[#0f2d4e] text-slate-100 p-3 rounded-xl border border-slate-700/30 shadow-xs flex flex-wrap items-center justify-between gap-x-6 gap-y-2 text-xs font-sans">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-blue-300 font-mono font-bold tracking-wide uppercase">Course:</span>
-                      <span className="font-mono text-[11px] font-extrabold text-white bg-blue-900 border border-blue-800/80 px-2 py-0.5 rounded leading-none">{selectedCourse.code}</span>
-                      <span className="font-bold text-white text-xs">{selectedCourse.title}</span>
-                    </div>
-                    <div className="flex items-center gap-4 text-[11px] font-mono text-slate-200/90">
-                      <div>Cr. Hrs: <strong className="text-white">{selectedCourse.creditHours}-0-{selectedCourse.creditHours}</strong></div>
-                      <div className="h-3 w-px bg-slate-500/30"></div>
-                      <div>Instructor: <strong className="text-white font-sans font-semibold">{instructorName}</strong></div>
-                      <div className="h-3 w-px bg-slate-500/30"></div>
-                      <div>Semester: <strong className="text-white font-bold">Spring-26</strong></div>
-                      <div className="h-3 w-px bg-slate-500/30"></div>
-                      <div>Section: <strong className="text-white font-bold">All</strong></div>
-                    </div>
-                  </div>
-
-                  {/* SPREADSHEET LEDGER TABLE */}
-                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
-                    <div className="overflow-auto max-h-[380px]">
-                      <table className="w-full text-left text-xs border-collapse font-sans min-w-[800px] relative">
-                        <thead className="sticky top-0 bg-slate-100 z-20 shadow-xs">
-                          <tr className="bg-slate-100 text-slate-700 font-bold border-b border-slate-300">
-                            <th className="py-2.5 px-3 w-12 text-center border-r border-slate-200 bg-slate-150/50 sticky top-0 z-20">S.#</th>
-                            <th className="py-2.5 px-3 w-40 border-r border-slate-200 font-sans sticky top-0 bg-slate-100 z-20">Roll No</th>
-                            <th className="py-2.5 px-3 min-w-[200px] border-r border-slate-200 sticky top-0 bg-slate-100 z-20">Student Name</th>
-                            
-                            {tableColumns.map((col, index) => (
-                              <th key={`head-${col.categoryName}-${col.unitNo}-${index}`} className="py-2 px-1 text-center border-r border-slate-200 font-mono w-16 bg-[#f1f5f9] sticky top-0 z-20">
-                                <span className="block text-indigo-950 font-bold">{col.label}</span>
-                                <span className="block text-[8px] text-slate-450 font-normal mt-0.5">Max {col.totalMarks}</span>
-                              </th>
-                            ))}
-                            
-                            <th className="py-2.5 px-3 text-center border-r border-slate-200 font-bold text-slate-800 bg-indigo-50/20 w-24 sticky top-0 z-20">TMarks</th>
-                            <th className="py-2.5 px-3 text-center font-bold text-indigo-755 bg-indigo-50/40 w-20 sticky top-0 z-20">Grade</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-250 font-mono text-slate-705">
-                          {selectedCourse.students.map((std, idx) => {
-                            const tMarks = calculateStudentCourseTotal(std);
-                            const grade = getLetterGrade(tMarks);
-                            
-                            return (
-                              <tr key={`row-${std.regNo}-${idx}`} className="hover:bg-slate-55/60 transition-colors">
-                                <td className="py-2 px-3 text-center text-slate-400 border-r border-slate-150 bg-slate-50/50">
-                                  {idx + 1}
-                                </td>
-                                <td className="py-2 px-3 text-indigo-950 font-bold text-[11px] border-r border-slate-150 truncate">
-                                  {std.regNo}
-                                </td>
-                                <td className="py-2 px-3 font-sans text-slate-905 border-r border-slate-150 truncate max-w-[220px]">
-                                  {std.name}
-                                </td>
-                                
-                                {tableColumns.map((col, cIdx) => {
-                                  const markVal = getStudentMark(std, col.categoryName, col.unitNo, col.totalMarks);
-                                  return (
-                                    <td key={`cell-${std.regNo}-${col.categoryName}-${col.unitNo}-${cIdx}`} className="py-1 px-1 text-center border-r border-slate-150 bg-white">
-                                      <CellInput
-                                        initialValue={markVal}
-                                        totalMarks={col.totalMarks}
-                                        passing={col.passing}
-                                        rowIndex={idx}
-                                        colIndex={cIdx}
-                                        onSave={(newScore) => handleUpdateStudentMark(std.regNo, col.categoryName, col.unitNo, newScore)}
-                                      />
-                                    </td>
-                                  );
-                                })}
-                                
-                                <td className="py-2 px-3 text-center font-bold text-slate-900 border-r border-slate-150 bg-slate-50/50">
-                                  {tMarks.toFixed(1)} / 100
-                                </td>
-                                <td className={`py-2 px-3 text-center font-bold border-r border-slate-150 bg-indigo-50/30 ${
-                                  grade === 'F' ? 'text-rose-600 font-extrabold' : 'text-emerald-700 font-extrabold'
-                                }`}>
-                                  {grade}
-                                </td>
-                              </tr>
-                            );
-                          })}
-
-                          {selectedCourse.students.length > 0 && (() => {
-                            const stdCount = selectedCourse.students.length;
-                            
-                            // 1. Calculate Average row counts
-                            const colAverages = tableColumns.map(col => {
-                              const sum = selectedCourse.students.reduce((acc, s) => {
-                                return acc + getStudentMark(s, col.categoryName, col.unitNo, col.totalMarks);
-                              }, 0);
-                              return parseFloat((sum / stdCount).toFixed(2));
+                    selectedCourse.categories.filter(c => c.percentage > 0 && c.units > 0).forEach(cat => {
+                      for (let u = 1; u <= cat.units; u++) {
+                        const matchingUnit = (selectedCourse.unitsData[cat.name] || []).find(unit => unit.unitNo === u);
+                        const questions = matchingUnit?.questions || [];
+                        const maxMarks = matchingUnit ? matchingUnit.totalMarks : 10;
+                        
+                        // Count how many students have marks recorded for this unit/assessment
+                        let graded = 0;
+                        selectedCourse.students.forEach(std => {
+                          let hasMark = false;
+                          if (questions.length > 0) {
+                            hasMark = questions.some(q => {
+                              const qKey = `q-${cat.name}-${u}-${q.id}`;
+                              return std.marks?.[qKey] !== undefined && std.marks[qKey] > 0;
                             });
+                          } else {
+                            const dKey = `${cat.name}-${u}`;
+                            hasMark = std.marks?.[dKey] !== undefined && std.marks[dKey] > 0;
+                          }
+                          if (hasMark) graded++;
+                        });
 
-                            const tMarksAverage = parseFloat((selectedCourse.students.reduce((acc, s) => {
-                              return acc + calculateStudentCourseTotal(s);
-                            }, 0) / stdCount).toFixed(2));
+                        assessmentsList.push({
+                          categoryName: cat.name,
+                          unitNo: u,
+                          key: `${cat.name}:::${u}`,
+                          label: `${cat.name} — Unit ${u}`,
+                          maxMarks,
+                          weightage: matchingUnit ? matchingUnit.weightage : Math.round(100 / cat.units),
+                          questionsCount: questions.length,
+                          gradedCount: graded
+                        });
+                      }
+                    });
 
-                            return (
-                              <>
-                                {/* FORMULA 1: AVERAGE ROW */}
-                                <tr className="bg-red-50/45 text-slate-900 font-bold border-t-2 border-slate-300">
-                                  <td className="py-2.5 px-3 text-center text-rose-800 bg-red-100/40 border-r border-slate-200">
-                                    F1
-                                  </td>
-                                  <td className="py-2.5 px-3 text-rose-950 text-xs font-bold border-r border-slate-200">
-                                    Average
-                                  </td>
-                                  <td className="py-2.5 px-3 font-sans text-rose-900 border-r border-slate-200 italic">
-                                    Class Outcome Average
-                                  </td>
-                                  {colAverages.map((avg, i) => (
-                                    <td key={`avg-${i}`} className="py-2 px-1 text-center border-r border-slate-200 text-indigo-900 font-mono text-[11px]">
-                                      {avg.toFixed(2)}
-                                    </td>
-                                  ))}
-                                  <td className="py-2.5 px-3 text-center border-r border-slate-200 text-indigo-900 text-xs font-mono font-bold bg-[#f1f5f9]">
-                                    {tMarksAverage.toFixed(2)}
-                                  </td>
-                                  <td className="py-2.5 px-3 text-center bg-[#f1f5f9]">
-                                    -
-                                  </td>
-                                </tr>
-                              </>
-                            );
-                          })()}
+                    // Resolve selected active assessment key
+                    let activeAssessmentKey = selectedObeAssKey;
+                    if (!activeAssessmentKey || !assessmentsList.some(a => a.key === activeAssessmentKey)) {
+                      if (assessmentsList.length > 0) {
+                        activeAssessmentKey = assessmentsList[0].key;
+                      }
+                    }
 
-                          {selectedCourse.students.length === 0 && (
-                            <tr>
-                              <td colSpan={5 + tableColumns.length} className="py-12 bg-slate-50/50 text-center text-slate-505 font-sans">
-                                <FileSpreadsheet className="w-8 h-8 text-slate-350 mx-auto mb-2 animate-pulse" />
-                                <h5 className="font-bold text-slate-700">Student Register is empty</h5>
-                                <p className="text-[10px] text-slate-500 mt-1">Please enroll students via "Add Student" tab to populate and edit marks ledger entries.</p>
-                              </td>
-                            </tr>
+                    const [curCat, curUnitStr] = (activeAssessmentKey || '').split(':::');
+                    const curUnit = parseInt(curUnitStr || '1', 10);
+                    const curAssessment = assessmentsList.find(a => a.key === activeAssessmentKey);
+                    
+                    const matchingUnit = curCat 
+                      ? (selectedCourse.unitsData[curCat] || []).find(u => u.unitNo === curUnit)
+                      : null;
+                    const unitQuestions = matchingUnit?.questions || [];
+                    const totalMarksMax = matchingUnit?.totalMarks ?? 10;
+
+                    const enrolledCount = selectedCourse.students.length;
+
+                    return (
+                      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                        {/* LEFT SIDEBAR: LIST OF COURSE EVALUATIONS */}
+                        <div className="lg:col-span-3 bg-white rounded-xl border border-slate-200 p-4 shadow-3xs space-y-3">
+                          <div className="pb-2 border-b border-slate-100 flex items-center justify-between">
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Assessments</span>
+                            <span className="text-[9px] font-bold text-[#4f46e5] bg-indigo-50 px-1.5 rounded-md font-mono">{assessmentsList.length} total</span>
+                          </div>
+
+                          {assessmentsList.length === 0 ? (
+                            <div className="text-center py-8 text-slate-400 text-xs italic">
+                              No active assessments. Configure weights and units in "Set Weightage" first.
+                            </div>
+                          ) : (
+                            <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
+                              {assessmentsList.map(ass => {
+                                const isActive = ass.key === activeAssessmentKey;
+                                const isComplete = ass.gradedCount === enrolledCount && ass.gradedCount > 0;
+
+                                return (
+                                  <button
+                                    key={ass.key}
+                                    onClick={() => setSelectedObeAssKey(ass.key)}
+                                    className={`w-full text-left p-3 rounded-xl border transition-all duration-150 flex flex-col justify-between cursor-pointer focus:outline-none ${
+                                      isActive 
+                                        ? 'bg-indigo-650 text-white border-indigo-700 shadow-sm font-semibold' 
+                                        : 'bg-slate-50/60 hover:bg-slate-100/85 text-slate-705 border-slate-200'
+                                    }`}
+                                  >
+                                    <div className="flex items-center justify-between w-full">
+                                      <span className={`text-xs font-bold font-sans ${isActive ? 'text-white' : 'text-slate-900'}`}>
+                                        {ass.label}
+                                      </span>
+                                      
+                                      {isActive ? (
+                                        <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span>
+                                      ) : isComplete ? (
+                                        <span className="text-[9px] font-black bg-emerald-100 border border-emerald-200 text-emerald-800 rounded px-1.5 py-0.2 select-none font-mono">
+                                          Done
+                                        </span>
+                                      ) : ass.gradedCount > 0 ? (
+                                        <span className="text-[9px] font-black bg-amber-100 border border-amber-200 text-amber-800 rounded px-1.5 py-0.2 select-none font-mono">
+                                          Grading
+                                        </span>
+                                      ) : (
+                                        <span className="text-[9px] font-black bg-slate-100 border border-slate-200 text-slate-400 rounded px-1.5 py-0.2 select-none font-mono">
+                                          New
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    <div className="flex items-baseline justify-between w-full mt-2.5">
+                                      <span className={`text-[10px] ${isActive ? 'text-indigo-200' : 'text-slate-500'}`}>
+                                        Max: {ass.maxMarks}m • Weight: {ass.weightage}%
+                                      </span>
+                                      <span className={`text-[11px] font-mono font-bold ${isActive ? 'text-white' : 'text-slate-700'}`}>
+                                        {ass.gradedCount} / {enrolledCount} graded
+                                      </span>
+                                    </div>
+
+                                    <div className="w-full bg-slate-200/50 rounded-full h-1 mt-1.5 overflow-hidden">
+                                      <div 
+                                        className={`h-full transition-all duration-300 ${isActive ? 'bg-indigo-200' : 'bg-indigo-600'}`}
+                                        style={{ width: `${(ass.gradedCount / (enrolledCount || 1)) * 100}%` }}
+                                      />
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
                           )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
+                        </div>
+
+                        {/* RIGHT CONTENT: SELECTED ASSESSMENT WORKSPACE */}
+                        <div className="lg:col-span-9 space-y-5">
+                          {!curAssessment ? (
+                            <div className="bg-slate-50 border border-slate-205 rounded-xl p-8 text-center text-slate-450 text-xs font-sans italic shadow-3xs">
+                              Select an assessment item on the left list to begin grading student evaluations.
+                            </div>
+                          ) : (
+                            <>
+                              {/* Evaluation Workspace Header */}
+                              <div className="bg-white border border-slate-200 p-5 rounded-xl shadow-3xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[9px] font-black tracking-widest text-[#4f46e5] bg-[#eef2ff] border border-[#e0e7ff] px-2.5 py-0.5 rounded-full uppercase">
+                                      EXPERT MARKS WORKFLOW
+                                    </span>
+                                    <span className={`text-[9px] font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1 ${
+                                      unitQuestions.length > 0 
+                                        ? 'text-emerald-700 bg-emerald-50 border border-emerald-150' 
+                                        : 'text-amber-700 bg-amber-50 border border-amber-150'
+                                    }`}>
+                                      {unitQuestions.length > 0 ? '✨ OBE Mode (CLO Question-Level)' : '⚠️ Direct Score Mode'}
+                                    </span>
+                                  </div>
+                                  <h3 className="text-base font-black text-slate-900 mt-1 flex items-center gap-2 font-sans tracking-tight">
+                                    <ClipboardCheck className="w-4 h-4 text-indigo-650" />
+                                    {curAssessment.label} Workspace
+                                  </h3>
+                                  <p className="text-xs text-slate-500 mt-0.5 font-sans">
+                                    Grade student questions mapped to Course Outcomes. Move between cells using <strong>Enter / ↑ / ↓ / ← / →</strong> keys on your keyboard.
+                                  </p>
+                                </div>
+
+                                <div className="flex items-center gap-2 self-start md:self-center">
+                                  <div className="relative">
+                                    <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                      <Search className="h-3.5 w-3.5 text-slate-400" />
+                                    </span>
+                                    <input
+                                      type="text"
+                                      value={spreadsheetSearchQuery}
+                                      onChange={(e) => setSpreadsheetSearchQuery(e.target.value)}
+                                      placeholder="Filter students..."
+                                      className="pl-9 pr-4 py-1.5 w-52 bg-white border border-slate-250 hover:border-slate-350 focus:border-[#4f46e5] focus:outline-none transition-all rounded-xl text-xs font-semibold text-slate-800 shadow-3xs"
+                                    />
+                                    {spreadsheetSearchQuery && (
+                                      <button
+                                        onClick={() => setSpreadsheetSearchQuery('')}
+                                        className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 text-xs"
+                                      >
+                                        ×
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Performance statistics dashboard */}
+                              {(() => {
+                                let marksSum = 0;
+                                let gradedCount = 0;
+                                selectedCourse.students.forEach(std => {
+                                  const m = getStudentMark(std, curCat, curUnit, totalMarksMax, selectedCourse.unitsData);
+                                  if (m > 0) gradedCount++;
+                                  marksSum += m;
+                                });
+                                const localAverage = enrolledCount > 0 ? (marksSum / enrolledCount) : 0;
+                                const localPassLimit = matchingUnit ? matchingUnit.passing : (totalMarksMax * 0.5);
+                                const passedStudentsCount = selectedCourse.students.filter(std => {
+                                  const m = getStudentMark(std, curCat, curUnit, totalMarksMax, selectedCourse.unitsData);
+                                  return m >= localPassLimit;
+                                }).length;
+                                const localPassRate = enrolledCount > 0 ? (passedStudentsCount / enrolledCount) * 100 : 0;
+
+                                return (
+                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 bg-white border border-slate-200 p-4 rounded-xl shadow-3xs">
+                                    <div>
+                                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block font-sans">Grading Count</span>
+                                      <span className="text-[14px] font-black text-slate-800 font-mono">
+                                        {gradedCount} <span className="text-[11px] font-normal text-slate-400">/ {enrolledCount} rows</span>
+                                      </span>
+                                    </div>
+                                    <div className="border-l border-slate-150 pl-4">
+                                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block font-sans">Assessment Average</span>
+                                      <span className="text-[14px] font-black text-indigo-650 font-mono">
+                                        {localAverage.toFixed(1)} <span className="text-[11px] font-normal text-slate-450">/ {totalMarksMax}m</span>
+                                      </span>
+                                    </div>
+                                    <div className="border-l border-slate-150 pl-4">
+                                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block font-sans">Passing Limit</span>
+                                      <span className="text-[14px] font-black text-rose-600 font-mono">
+                                        &gt;= {localPassLimit}m
+                                      </span>
+                                    </div>
+                                    <div className="border-l border-slate-150 pl-4">
+                                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block font-sans">Success Rate</span>
+                                      <span className="text-[14px] font-black text-emerald-600 font-mono">
+                                        {localPassRate.toFixed(0)}%
+                                      </span>
+                                    </div>
+                                  </div>
+                                );
+                              })()}
+
+                              {/* CORE SPREADSHEEET SHEETS */}
+                              {unitQuestions.length > 0 ? (
+                                /* CASE A: UNIT HAS DETAILED QUESTIONS MAPPED */
+                                <div className="space-y-4">
+                                  <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-3xs">
+                                    <div className="bg-slate-50 border-b border-slate-200 px-4 py-2.5 flex items-center justify-between flex-wrap gap-2">
+                                      <span className="text-xs font-bold text-slate-700 font-sans tracking-wide uppercase flex items-center gap-1.5">
+                                        <Sliders className="w-3.5 h-3.5 text-indigo-500" />
+                                        OBE Ledger Matrix ({unitQuestions.length} questions)
+                                      </span>
+                                      
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <button
+                                          onClick={() => {
+                                            if (confirm(`Auto-Fill MAX MARKS for ALL students in this Assessment (${curAssessment.label})? This overwrites empty fields.`)) {
+                                              setCourses(prev => prev.map(c => {
+                                                if (c.id === selectedCourse.id) {
+                                                  const updatedStudents = c.students.map(std => {
+                                                    const nextMarks = { ...(std.marks || {}) };
+                                                    unitQuestions.forEach(q => {
+                                                      nextMarks[`q-${curCat}-${curUnit}-${q.id}`] = q.maxMarks;
+                                                    });
+                                                    nextMarks[`${curCat}-${curUnit}`] = totalMarksMax;
+                                                    return { ...std, marks: nextMarks };
+                                                  });
+                                                  return { ...c, students: updatedStudents };
+                                                }
+                                                return c;
+                                              }));
+                                            }
+                                          }}
+                                          className="px-2.5 py-1 text-[11px] font-bold bg-[#eef2ff] hover:bg-[#e0e7ff] text-[#4f46e5] rounded-md border border-[#e0e7ff] transition-colors flex items-center gap-1 cursor-pointer"
+                                        >
+                                          <Sparkles className="w-3 h-3" />
+                                          Fill Max Marks
+                                        </button>
+                                        <button
+                                          onClick={() => {
+                                            if (confirm(`Clear and reset ALL student marks in this assessment (${curAssessment.label})?`)) {
+                                              setCourses(prev => prev.map(c => {
+                                                if (c.id === selectedCourse.id) {
+                                                  const updatedStudents = c.students.map(std => {
+                                                    const nextMarks = { ...(std.marks || {}) };
+                                                    unitQuestions.forEach(q => {
+                                                      nextMarks[`q-${curCat}-${curUnit}-${q.id}`] = 0;
+                                                    });
+                                                    nextMarks[`${curCat}-${curUnit}`] = 0;
+                                                    return { ...std, marks: nextMarks };
+                                                  });
+                                                  return { ...c, students: updatedStudents };
+                                                }
+                                                return c;
+                                              }));
+                                            }
+                                          }}
+                                          className="px-2.5 py-1 text-[11px] font-bold bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-md border border-rose-150 transition-colors cursor-pointer"
+                                        >
+                                          Reset Scores
+                                        </button>
+                                        <button
+                                          onClick={() => {
+                                            if (confirm("Revert this evaluation to Direct Marks? This deletes subquestions definitions and their marks.")) {
+                                              handleClearInlineQuestions(curCat, curUnit);
+                                            }
+                                          }}
+                                          className="px-2.5 py-1 text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-705 border border-slate-200 rounded-md transition-colors cursor-pointer"
+                                        >
+                                          Reset to Direct
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    <div className="overflow-x-auto">
+                                      <table className="w-full text-left border-collapse text-xs table-fixed">
+                                        <thead className="bg-[#f8fafc] border-b border-slate-200 select-none">
+                                          <tr className="divide-x divide-slate-200 font-semibold text-slate-600 text-center">
+                                            <th className="py-2.5 w-12 sticky left-0 bg-[#f8fafc] z-10">S.#</th>
+                                            <th className="py-2.5 w-28 sticky left-12 bg-[#f8fafc] z-10 text-left pl-3">Reg No</th>
+                                            <th className="py-2.5 w-40 sticky left-40 bg-[#f8fafc] z-10 text-left pl-3">Student Name</th>
+                                            
+                                            {unitQuestions.map(q => (
+                                              <th key={q.id} className="py-2.5 w-24 bg-white font-sans text-center">
+                                                <div className="flex flex-col items-center justify-center space-y-0.5 leading-tight">
+                                                  <span className="font-extrabold text-slate-800 tracking-wide">{q.name}</span>
+                                                  <span className="text-[9px] text-[#4f46e5] font-mono">Max {q.maxMarks}m</span>
+                                                  {q.mappedCLOs && q.mappedCLOs.length > 0 && (
+                                                    <span className="text-[8.5px] font-bold bg-amber-50 border border-amber-200 text-amber-805 rounded px-1 scale-95 origin-center font-mono">
+                                                      {q.mappedCLOs.join(', ')}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                              </th>
+                                            ))}
+                                            
+                                            <th className="py-2.5 w-24 bg-indigo-50/50 text-[#4f46e5] font-black font-sans text-center">Obtained</th>
+                                            <th className="py-2.5 w-20 bg-[#f8fafc] text-center">Percent</th>
+                                            <th className="py-2.5 w-20 bg-[#f8fafc] text-center">Status</th>
+                                          </tr>
+                                        </thead>
+                                        
+                                        <tbody className="divide-y divide-slate-150 font-mono text-slate-700">
+                                          {(() => {
+                                            const filteredStudents = selectedCourse.students.filter(student => {
+                                              if (!spreadsheetSearchQuery) return true;
+                                              const qLower = spreadsheetSearchQuery.toLowerCase();
+                                              return (
+                                                student.name.toLowerCase().includes(qLower) ||
+                                                student.regNo.toLowerCase().includes(qLower)
+                                              );
+                                            });
+
+                                            if (filteredStudents.length === 0) {
+                                              return (
+                                                <tr>
+                                                  <td colSpan={unitQuestions.length + 6} className="py-8 text-center text-slate-400 italic font-sans text-xs">
+                                                    No matching students registered.
+                                                  </td>
+                                                </tr>
+                                              );
+                                            }
+
+                                            return filteredStudents.map((student, stdIdx) => {
+                                              const obtainedScore = unitQuestions.reduce((sum, q) => {
+                                                const qKey = `q-${curCat}-${curUnit}-${q.id}`;
+                                                return sum + (student.marks?.[qKey] ?? 0);
+                                              }, 0);
+                                              
+                                              const localPassLimit = matchingUnit ? matchingUnit.passing : (totalMarksMax * 0.5);
+                                              const isPassed = obtainedScore >= localPassLimit;
+                                              const scorePercent = totalMarksMax > 0 ? ((obtainedScore / totalMarksMax) * 100).toFixed(0) : '0';
+
+                                              return (
+                                                <tr key={student.regNo} className="group hover:bg-slate-50/30 divide-x divide-slate-150">
+                                                  <td className="p-2 text-center text-slate-400 bg-slate-50 group-hover:bg-[#f8fafc] sticky left-0 z-10 transition-colors">
+                                                    {stdIdx + 1}
+                                                  </td>
+                                                  <td className="p-2 pl-3 font-extrabold text-indigo-950 bg-white group-hover:bg-[#fafbff] sticky left-12 z-10 text-[10.5px] tracking-wide truncate transition-colors">
+                                                    {student.regNo}
+                                                  </td>
+                                                  <td className="p-2 pl-3 font-bold text-slate-700 bg-white group-hover:bg-[#fafbff] sticky left-40 z-10 text-left truncate transition-colors">
+                                                    {student.name}
+                                                  </td>
+
+                                                  {unitQuestions.map((q, qIdx) => {
+                                                    const cellId = `excel-sub-cell-${stdIdx}-${qIdx}`;
+                                                    const qKey = `q-${curCat}-${curUnit}-${q.id}`;
+                                                    const cellValue = student.marks?.[qKey] !== undefined ? String(student.marks[qKey]) : '';
+
+                                                    return (
+                                                      <td key={q.id} className="p-1 text-center w-24">
+                                                        <input
+                                                          id={cellId}
+                                                          type="text"
+                                                          inputMode="decimal"
+                                                          pattern="[0-9]*\.?[0-9]*"
+                                                          value={cellValue}
+                                                          placeholder="0"
+                                                          onChange={(e) => {
+                                                            const val = e.target.value;
+                                                            if (val === '' || /^\d*\.?\d*$/.test(val)) {
+                                                              const numVal = val === '' ? 0 : parseFloat(val);
+                                                              handleSaveQuestionMark(student.regNo, curCat, curUnit, q.id, numVal);
+                                                            }
+                                                          }}
+                                                          onBlur={(e) => {
+                                                            const val = parseFloat(e.target.value);
+                                                            if (isNaN(val) || val < 0) {
+                                                              handleSaveQuestionMark(student.regNo, curCat, curUnit, q.id, 0);
+                                                            } else if (val > q.maxMarks) {
+                                                              handleSaveQuestionMark(student.regNo, curCat, curUnit, q.id, q.maxMarks);
+                                                            }
+                                                          }}
+                                                          onFocus={(e) => e.target.select()}
+                                                          onKeyDown={(e) => {
+                                                            if (e.key === 'Enter' || e.key === 'ArrowDown') {
+                                                              e.preventDefault();
+                                                              const tgt = document.getElementById(`excel-sub-cell-${stdIdx + 1}-${qIdx}`);
+                                                              if (tgt) (tgt as HTMLInputElement).focus();
+                                                            } else if (e.key === 'ArrowUp') {
+                                                              e.preventDefault();
+                                                              const tgt = document.getElementById(`excel-sub-cell-${stdIdx - 1}-${qIdx}`);
+                                                              if (tgt) (tgt as HTMLInputElement).focus();
+                                                            } else if (e.key === 'ArrowRight') {
+                                                              const el = e.target as HTMLInputElement;
+                                                              if (el.selectionEnd === el.value.length || el.value.length === 0) {
+                                                                const tgt = document.getElementById(`excel-sub-cell-${stdIdx}-${qIdx + 1}`);
+                                                                if (tgt) (tgt as HTMLInputElement).focus();
+                                                              }
+                                                            } else if (e.key === 'ArrowLeft') {
+                                                              const el = e.target as HTMLInputElement;
+                                                              if (el.selectionStart === 0 || el.value.length === 0) {
+                                                                const tgt = document.getElementById(`excel-sub-cell-${stdIdx}-${qIdx - 1}`);
+                                                                if (tgt) (tgt as HTMLInputElement).focus();
+                                                              }
+                                                            }
+                                                          }}
+                                                          className={`w-14 text-center font-mono font-bold text-xs bg-slate-50/50 border border-slate-205 rounded px-1.5 py-1 focus:ring-1 focus:ring-indigo-500 focus:bg-white focus:outline-none transition-all ${
+                                                            cellValue === '0' || cellValue === '' ? 'text-rose-500 font-medium' : 'text-slate-900 font-extrabold'
+                                                          }`}
+                                                        />
+                                                      </td>
+                                                    );
+                                                  })}
+
+                                                  <td className="p-2 text-center text-xs font-black text-[#4f46e5] bg-indigo-50/20">
+                                                    {obtainedScore.toFixed(1)} <span className="text-[10px] text-slate-400 font-normal">/ {totalMarksMax}</span>
+                                                  </td>
+                                                  
+                                                  <td className="p-2 text-center text-slate-500 font-bold">
+                                                    {scorePercent}%
+                                                  </td>
+
+                                                  <td className="p-2 text-center">
+                                                    <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-black border ${
+                                                      isPassed 
+                                                        ? 'bg-emerald-50 border-emerald-250 text-emerald-800' 
+                                                        : 'bg-rose-50 border-rose-200 text-rose-700'
+                                                    }`}>
+                                                      {isPassed ? 'Pass' : 'Fail'}
+                                                    </span>
+                                                  </td>
+                                                </tr>
+                                              );
+                                            });
+                                          })()}
+                                        </tbody>
+
+                                        {/* TABLE FOOTER: COLUMN AVERAGES */}
+                                        <tfoot className="border-t-2 border-slate-200 bg-slate-50 font-semibold text-slate-705 shadow-sm">
+                                          <tr className="divide-x divide-slate-150 text-center">
+                                            <td colSpan={3} className="py-2.5 font-sans font-bold text-[10px] uppercase text-slate-500 sticky left-0 bg-slate-50 z-10 border-r text-center">
+                                              Question Averages
+                                            </td>
+
+                                            {unitQuestions.map(q => {
+                                              let sumOfMarks = 0;
+                                              selectedCourse.students.forEach(std => {
+                                                const qKey = `q-${curCat}-${curUnit}-${q.id}`;
+                                                sumOfMarks += std.marks?.[qKey] ?? 0;
+                                              });
+                                              const avg = enrolledCount > 0 ? (sumOfMarks / enrolledCount) : 0;
+                                              const avgPercent = q.maxMarks > 0 ? (avg / q.maxMarks) * 100 : 0;
+
+                                              return (
+                                                <td key={q.id} className="py-2.5 bg-white">
+                                                  <span className="text-slate-955 block font-black text-xs">{avg.toFixed(1)}</span>
+                                                  <span className="text-[9px] text-slate-400 font-normal">{avgPercent.toFixed(0)}% avg</span>
+                                                </td>
+                                              );
+                                            })}
+
+                                            {/* Overall Category Unit Total Obtained */}
+                                            {(() => {
+                                              let sumOfTotals = 0;
+                                              selectedCourse.students.forEach(std => {
+                                                sumOfTotals += getStudentMark(std, curCat, curUnit, totalMarksMax, selectedCourse.unitsData);
+                                              });
+                                              const overallAverage = enrolledCount > 0 ? (sumOfTotals / enrolledCount) : 0;
+                                              const overallAveragePct = totalMarksMax > 0 ? (overallAverage / totalMarksMax) * 100 : 0;
+
+                                              return (
+                                                <>
+                                                  <td className="py-2.5 text-indigo-650 bg-indigo-50/20 font-black text-xs text-center">
+                                                    {overallAverage.toFixed(1)} / {totalMarksMax}
+                                                  </td>
+                                                  <td className="py-2.5 bg-slate-50 text-center font-bold text-slate-650">
+                                                    {overallAveragePct.toFixed(0)}%
+                                                  </td>
+                                                  <td className="py-2.5 bg-slate-50 border-r-0"></td>
+                                                </>
+                                              );
+                                            })()}
+                                          </tr>
+                                        </tfoot>
+                                      </table>
+                                    </div>
+                                  </div>
+
+                                  {/* INLINE QUESTION MANAGEMENT DESK */}
+                                  <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-3xs space-y-4">
+                                    <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
+                                      <div>
+                                        <h4 className="text-xs font-black text-slate-900 uppercase tracking-wide">Live Question Matrix Editor</h4>
+                                        <p className="text-[10.5px] text-slate-500 mt-0.5 font-sans">Modify labels, assign scores, or alter Course Outcomes dynamically without switching screens.</p>
+                                      </div>
+                                      <span className="px-2 py-0.5 bg-indigo-50 border border-indigo-200 text-[#4f46e5] text-[10px] font-black rounded font-mono uppercase tracking-wider">
+                                        Active
+                                      </span>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                      {/* CURRENT LIST */}
+                                      <div className="space-y-2 border border-slate-100 rounded-lg p-3 bg-slate-50/50 max-h-52 overflow-y-auto">
+                                        <span className="text-[9px] font-black uppercase text-slate-400 tracking-wider block font-sans">Active Subquestions</span>
+                                        {unitQuestions.map((q, qIndex) => (
+                                          <div key={q.id} className="flex items-center justify-between p-2 bg-white rounded-lg border border-slate-200">
+                                            <div className="flex items-center gap-2">
+                                              <span className="text-[10px] font-mono font-extrabold px-1.5 py-0.5 rounded text-indigo-700 bg-indigo-50">
+                                                Q{qIndex + 1}
+                                              </span>
+                                              <span className="text-xs font-bold text-slate-800 font-sans">{q.name}</span>
+                                              <span className="text-[10px] font-mono text-slate-400 font-semibold">({q.maxMarks}m)</span>
+                                            </div>
+                                            
+                                            <div className="flex items-center gap-2">
+                                              {q.mappedCLOs && q.mappedCLOs.length > 0 ? (
+                                                <span className="text-[9.5px] font-bold bg-amber-50 border border-amber-250 text-amber-805 rounded px-1.5 font-mono">
+                                                  {q.mappedCLOs.join(', ')}
+                                                </span>
+                                              ) : (
+                                                <span className="text-[9.5px] font-semibold text-rose-500 bg-rose-50 px-1.5 rounded animate-pulse">Unmapped</span>
+                                              )}
+                                              <button
+                                                onClick={() => {
+                                                  setCourses(prev => prev.map(c => {
+                                                    if (c.id === selectedCourse.id) {
+                                                      const existU = c.unitsData[curCat] || [];
+                                                      const nextU = existU.map(unitItem => {
+                                                        if (unitItem.unitNo === curUnit) {
+                                                          const nextQ = (unitItem.questions || []).filter(item => item.id !== q.id);
+                                                          const sumMarks = nextQ.length > 0 ? nextQ.reduce((sum, item) => sum + item.maxMarks, 0) : unitItem.totalMarks;
+                                                          return {
+                                                            ...unitItem,
+                                                            questions: nextQ,
+                                                            totalMarks: sumMarks,
+                                                            mappedCLOs: [...new Set(nextQ.flatMap(item => item.mappedCLOs || []))].sort()
+                                                          };
+                                                        }
+                                                        return unitItem;
+                                                      });
+                                                      return {
+                                                        ...c,
+                                                        unitsData: { ...c.unitsData, [curCat]: nextU }
+                                                      };
+                                                    }
+                                                    return c;
+                                                  }));
+                                                }}
+                                                className="text-rose-500 hover:text-rose-755 p-1 hover:bg-rose-50 rounded transition-all cursor-pointer"
+                                                title="Delete question"
+                                              >
+                                                <Trash className="w-3.5 h-3.5" />
+                                              </button>
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+
+                                      {/* ADD QUESTION INLINE */}
+                                      <div className="bg-white border border-slate-205 p-3 rounded-lg space-y-3 z-10 shadow-2xs">
+                                        <span className="text-[9px] font-black uppercase text-slate-400 tracking-wider block font-sans">Quick Create Question</span>
+                                        
+                                        <div className="grid grid-cols-2 gap-2">
+                                          <div>
+                                            <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block mb-0.5">Label</label>
+                                            <input
+                                              type="text"
+                                              value={inlineQName}
+                                              onChange={(e) => setInlineQName(e.target.value)}
+                                              placeholder="e.g. Q1a"
+                                              className="bg-white border border-slate-300 rounded px-2 py-1 text-xs text-slate-900 w-full outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-sans"
+                                            />
+                                          </div>
+                                          <div>
+                                            <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block mb-0.5">Marks</label>
+                                            <input
+                                              type="text"
+                                              value={inlineQMaxMarks}
+                                              onChange={(e) => setInlineQMaxMarks(e.target.value)}
+                                              placeholder="5"
+                                              className="bg-white border border-slate-300 rounded px-2 py-1 text-xs text-slate-900 w-full outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-mono"
+                                            />
+                                          </div>
+                                        </div>
+
+                                        <div>
+                                          <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Target Outcome (CLO)</label>
+                                          <div className="flex flex-wrap gap-1.5">
+                                            {Array.from({ length: selectedCourse.cloCount || 4 }, (_, idx) => `CLO-${idx + 1}`).map(clo => {
+                                              const isSelected = inlineQMappedCLOs.includes(clo);
+                                              return (
+                                                <button
+                                                  key={clo}
+                                                  type="button"
+                                                  onClick={() => {
+                                                    setInlineQMappedCLOs(prev => {
+                                                      if (prev.includes(clo)) return prev.filter(c => c !== clo);
+                                                      return [...prev, clo];
+                                                    });
+                                                  }}
+                                                  className={`px-2 py-0.5 text-[10px] font-black font-mono rounded-lg transition-all border ${
+                                                    isSelected
+                                                      ? 'bg-amber-500 border-amber-600 text-white'
+                                                      : 'bg-slate-50 border-slate-205 text-slate-655 hover:bg-slate-100'
+                                                  }`}
+                                                >
+                                                  {clo}
+                                                </button>
+                                              );
+                                            })}
+                                          </div>
+                                        </div>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            if (!inlineQName.trim()) {
+                                              alert("Please enter a question label (e.g. Q1).");
+                                              return;
+                                            }
+                                            const marks = parseFloat(inlineQMaxMarks);
+                                            if (isNaN(marks) || marks <= 0) {
+                                              alert("Please enter a valid positive number for marks.");
+                                              return;
+                                            }
+                                            if (inlineQMappedCLOs.length === 0) {
+                                              alert("Please map this question to at least one CLO target.");
+                                              return;
+                                            }
+                                            
+                                            handleAddInlineQuestion(curCat, curUnit, inlineQName, marks, inlineQMappedCLOs);
+                                            setInlineQName('');
+                                            setInlineQMappedCLOs([]);
+                                          }}
+                                          className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold rounded-lg shadow-sm transition-colors flex items-center justify-center gap-1.5 font-sans cursor-pointer"
+                                        >
+                                          <Plus className="w-3.5 h-3.5" />
+                                          Add Question to Matrix
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              ) : (
+                                /* CASE B: COMPONENT LACKS SUBQUESTIONS (DIRECT MODE) */
+                                <div className="space-y-5">
+                                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+                                    
+                                    {/* DIRECT SCORES GRADING PANEL */}
+                                    <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl overflow-hidden shadow-3xs">
+                                      <div className="bg-slate-50 border-b border-slate-200 px-4 py-2.5 flex items-center justify-between flex-wrap gap-2">
+                                        <span className="text-xs font-bold text-slate-700 font-sans tracking-wide uppercase flex items-center gap-1.5">
+                                          <Sliders className="w-3.5 h-3.5 text-indigo-500" />
+                                          Direct Entry Ledger Grid (unpartitioned)
+                                        </span>
+                                        
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          <button
+                                            onClick={() => {
+                                              if (confirm(`Auto-Fill MAX MARKS (${totalMarksMax}m) for ALL students in this Assessment (${curAssessment.label})?`)) {
+                                                setCourses(prev => prev.map(c => {
+                                                  if (c.id === selectedCourse.id) {
+                                                    const updatedStudents = c.students.map(std => {
+                                                      const nextMarks = { ...(std.marks || {}) };
+                                                      nextMarks[`${curCat}-${curUnit}`] = totalMarksMax;
+                                                      return { ...std, marks: nextMarks };
+                                                    });
+                                                    return { ...c, students: updatedStudents };
+                                                  }
+                                                  return c;
+                                                }));
+                                              }
+                                            }}
+                                            className="px-2.5 py-1 text-[11px] font-bold bg-[#eef2ff] hover:bg-[#e0e7ff] text-[#4f46e5] rounded-md border border-[#e0e7ff] transition-colors flex items-center gap-1 cursor-pointer"
+                                          >
+                                            <Sparkles className="w-3 h-3" />
+                                            Fill Max Marks
+                                          </button>
+                                          <button
+                                            onClick={() => {
+                                              if (confirm(`Are you sure you want to delete and reset direct marks for this specific assessment (${curAssessment.label})?`)) {
+                                                setCourses(prev => prev.map(c => {
+                                                  if (c.id === selectedCourse.id) {
+                                                    const updatedStudents = c.students.map(std => {
+                                                      const nextMarks = { ...(std.marks || {}) };
+                                                      nextMarks[`${curCat}-${curUnit}`] = 0;
+                                                      return { ...std, marks: nextMarks };
+                                                    });
+                                                    return { ...c, students: updatedStudents };
+                                                  }
+                                                  return c;
+                                                }));
+                                              }
+                                            }}
+                                            className="px-2.5 py-1 text-[11px] font-bold bg-[#fef2f2] hover:bg-[#fecaca] text-[#dc2626] rounded-md border border-[#fca5a5] transition-colors cursor-pointer"
+                                          >
+                                            Reset Scores
+                                          </button>
+                                        </div>
+                                      </div>
+
+                                      <div className="overflow-x-auto">
+                                        <table className="w-full text-left border-collapse text-xs table-fixed">
+                                          <thead className="bg-[#f8fafc] border-b border-slate-200">
+                                            <tr className="divide-x divide-slate-200 font-semibold text-slate-600 text-center">
+                                              <th className="py-2.5 w-12 sticky left-0 bg-[#f8fafc] z-10">S.#</th>
+                                              <th className="py-2.5 w-28 sticky left-12 bg-[#f8fafc] z-10 text-left pl-3">Reg No</th>
+                                              <th className="py-2.5 w-40 sticky left-40 bg-[#f8fafc] z-10 text-left pl-3">Student Name</th>
+                                              <th className="py-2.5 bg-white text-center text-[#4f46e5] font-black">Obtained score</th>
+                                              <th className="py-2.5 w-20 bg-[#f8fafc]">Percent</th>
+                                              <th className="py-2.5 w-20 bg-[#f8fafc]">Status</th>
+                                            </tr>
+                                          </thead>
+                                          
+                                          <tbody className="divide-y divide-slate-150 font-mono text-slate-705">
+                                            {(() => {
+                                              const filteredStudents = selectedCourse.students.filter(student => {
+                                                if (!spreadsheetSearchQuery) return true;
+                                                const qLower = spreadsheetSearchQuery.toLowerCase();
+                                                return (
+                                                  student.name.toLowerCase().includes(qLower) ||
+                                                  student.regNo.toLowerCase().includes(qLower)
+                                                );
+                                              });
+
+                                              if (filteredStudents.length === 0) {
+                                                return (
+                                                  <tr>
+                                                    <td colSpan={6} className="py-8 text-center text-slate-404 italic font-sans text-xs">
+                                                      No student records found matching search.
+                                                    </td>
+                                                  </tr>
+                                                );
+                                              }
+
+                                              return filteredStudents.map((student, stdIdx) => {
+                                                const cellId = `excel-direct-cell-${stdIdx}`;
+                                                const dKey = `${curCat}-${curUnit}`;
+                                                const cellValueStr = student.marks?.[dKey] !== undefined ? String(student.marks[dKey]) : '';
+                                                const rawPoints = parseFloat(cellValueStr) || 0;
+
+                                                const localPassLimit = matchingUnit ? matchingUnit.passing : (totalMarksMax * 0.5);
+                                                const isPassed = rawPoints >= localPassLimit;
+                                                const scorePercentStr = totalMarksMax > 0 ? ((rawPoints / totalMarksMax) * 100).toFixed(0) : '0';
+
+                                                return (
+                                                  <tr key={student.regNo} className="group hover:bg-slate-50/30 divide-x divide-slate-150">
+                                                    <td className="p-2 text-center text-slate-400 bg-slate-50 group-hover:bg-[#f8fafc] sticky left-0 z-10 transition-colors">
+                                                      {stdIdx + 1}
+                                                    </td>
+                                                    <td className="p-2 pl-3 font-extrabold text-indigo-950 bg-white group-hover:bg-[#fafbff] sticky left-12 z-10 text-[10.5px] tracking-wide truncate transition-colors">
+                                                      {student.regNo}
+                                                    </td>
+                                                    <td className="p-2 pl-3 font-bold text-slate-700 bg-white group-hover:bg-[#fafbff] sticky left-40 z-10 text-left truncate transition-colors">
+                                                      {student.name}
+                                                    </td>
+                                                    <td className="p-1.5 text-center flex items-center justify-center gap-1.5 bg-white">
+                                                      <input
+                                                        id={cellId}
+                                                        type="text"
+                                                        inputMode="decimal"
+                                                        pattern="[0-9]*\.?[0-9]*"
+                                                        value={cellValueStr}
+                                                        placeholder="0"
+                                                        onChange={(e) => {
+                                                          const val = e.target.value;
+                                                          if (val === '' || /^\d*\.?\d*$/.test(val)) {
+                                                            const numVal = val === '' ? 0 : parseFloat(val);
+                                                            handleSaveUnitDirectMark(student.regNo, curCat, curUnit, numVal);
+                                                          }
+                                                        }}
+                                                        onBlur={(e) => {
+                                                          const val = parseFloat(e.target.value);
+                                                          if (isNaN(val) || val < 0) {
+                                                            handleSaveUnitDirectMark(student.regNo, curCat, curUnit, 0);
+                                                          } else if (val > totalMarksMax) {
+                                                            handleSaveUnitDirectMark(student.regNo, curCat, curUnit, totalMarksMax);
+                                                          }
+                                                        }}
+                                                        onFocus={(e) => e.target.select()}
+                                                        onKeyDown={(e) => {
+                                                          if (e.key === 'Enter' || e.key === 'ArrowDown') {
+                                                            e.preventDefault();
+                                                            const tgt = document.getElementById(`excel-direct-cell-${stdIdx + 1}`);
+                                                            if (tgt) (tgt as HTMLInputElement).focus();
+                                                          } else if (e.key === 'ArrowUp') {
+                                                            e.preventDefault();
+                                                            const tgt = document.getElementById(`excel-direct-cell-${stdIdx - 1}`);
+                                                            if (tgt) (tgt as HTMLInputElement).focus();
+                                                          }
+                                                        }}
+                                                        className={`w-20 text-center font-mono font-black text-xs bg-slate-50/50 border border-slate-205 rounded px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 focus:bg-white focus:outline-none transition-all ${
+                                                          cellValueStr === '0' || cellValueStr === '' ? 'text-rose-500 font-medium' : 'text-indigo-650 font-extrabold'
+                                                        }`}
+                                                      />
+                                                      <span className="text-[10px] text-slate-400 font-medium select-none">/ {totalMarksMax}m</span>
+                                                    </td>
+                                                    
+                                                    <td className="p-2 text-center text-slate-500 font-bold bg-white">
+                                                      {scorePercentStr}%
+                                                    </td>
+
+                                                    <td className="p-2 text-center bg-white">
+                                                      <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-black border ${
+                                                        isPassed 
+                                                          ? 'bg-emerald-50 border-emerald-250 text-emerald-805' 
+                                                          : 'bg-rose-50 border-rose-200 text-rose-700'
+                                                      }`}>
+                                                        {isPassed ? 'Pass' : 'Fail'}
+                                                      </span>
+                                                    </td>
+                                                  </tr>
+                                                );
+                                              });
+                                            })()}
+                                          </tbody>
+
+                                          <tfoot className="border-t-2 border-slate-200 bg-slate-50 font-semibold text-slate-700">
+                                            <tr className="divide-x divide-slate-150 text-center">
+                                              <td colSpan={3} className="py-2.5 font-sans font-bold text-[10px] uppercase text-slate-500 sticky left-0 bg-slate-50 z-10 border-r text-center">
+                                                Class Averages
+                                              </td>
+                                              
+                                              {(() => {
+                                                let sumOfMarks = 0;
+                                                selectedCourse.students.forEach(std => {
+                                                  const dKey = `${curCat}-${curUnit}`;
+                                                  sumOfMarks += std.marks?.[dKey] ?? 0;
+                                                });
+                                                const average = enrolledCount > 0 ? (sumOfMarks / enrolledCount) : 0;
+                                                const avgPercent = totalMarksMax > 0 ? (average / totalMarksMax) * 100 : 0;
+
+                                                return (
+                                                  <>
+                                                    <td className="py-2.5 bg-white text-center text-indigo-650 font-black text-xs">
+                                                      {average.toFixed(1)} <span className="text-[10px] text-slate-400 font-normal">/ {totalMarksMax}</span>
+                                                    </td>
+                                                    <td className="py-2.5 bg-white text-slate-600 text-center">
+                                                      {avgPercent.toFixed(0)}%
+                                                    </td>
+                                                    <td className="py-2.5 bg-white border-r-0"></td>
+                                                  </>
+                                                );
+                                              })()}
+                                            </tr>
+                                          </tfoot>
+                                        </table>
+                                      </div>
+                                    </div>
+
+                                    {/* INTERACTIVE OBE PARTITION WIZARD CARD */}
+                                    <div className="lg:col-span-5 bg-gradient-to-br from-indigo-50/40 to-[#f8fafc] border border-indigo-150 p-5 rounded-2xl shadow-3xs space-y-4">
+                                      <div className="flex items-center gap-1.5 pb-2 border-b border-indigo-100 flex-wrap">
+                                        <Sliders className="w-4 h-4 text-indigo-600 shrink-0" />
+                                        <div>
+                                          <h4 className="text-xs font-black text-indigo-900 uppercase tracking-widest leading-none">CLO Question Partition Wizard</h4>
+                                          <p className="text-[9.5px] text-indigo-700/80 mt-1 font-sans">Set up question-level grades mapped individually to Course Learning Outcomes (CLOs).</p>
+                                        </div>
+                                      </div>
+
+                                      <div className="space-y-4">
+                                        {/* OPTION 1: INSTANT WIZARD */}
+                                        <div className="bg-white border border-indigo-100 p-3.5 rounded-xl shadow-3xs space-y-2.5">
+                                          <span className="text-[10.5px] font-extrabold text-[#4f46e5] flex items-center gap-1 font-sans leading-none">
+                                            <Sparkles className="w-3.5 h-3.5 text-indigo-500 animate-pulse" />
+                                            Option A: 1-Click Auto-Splitter
+                                          </span>
+                                          <p className="text-[10.5px] text-slate-500 font-sans leading-normal">
+                                            Divide this assessment ({totalMarksMax}m) equally into subquestions beautifully auto-mapped to target outcomes (e.g. Q1 &rarr; CLO-1, Q2 &rarr; CLO-2).
+                                          </p>
+
+                                          <div className="flex items-center justify-between gap-2.5 pt-2 flex-wrap sm:flex-nowrap">
+                                            <div className="flex items-center gap-1 bg-slate-50 border border-slate-150 px-2 py-0.5 rounded-lg shrink-0">
+                                              <span className="text-[10px] text-slate-600 font-sans">Split:</span>
+                                              <select
+                                                value={wizardNumQuestions}
+                                                onChange={(e) => setWizardNumQuestions(parseInt(e.target.value) || 2)}
+                                                className="bg-transparent text-xs font-bold font-mono outline-none cursor-pointer border-0 p-0 text-slate-800"
+                                              >
+                                                <option value={2}>2 Questions (Q1-Q2)</option>
+                                                <option value={3}>3 Questions (Q1-Q3)</option>
+                                                <option value={4}>4 Questions (Q1-Q4)</option>
+                                                <option value={5}>5 Questions (Q1-Q5)</option>
+                                              </select>
+                                            </div>
+
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                if (confirm(`Auto-generate ${wizardNumQuestions} equal questions for ${curAssessment.label}? This unlocks detailed Outcomes inputs instantly.`)) {
+                                                  handleWizardPartition(curCat, curUnit, wizardNumQuestions);
+                                                }
+                                              }}
+                                              className="px-3.5 py-1.5 bg-[#4f46e5] hover:bg-indigo-700 text-white text-[11px] font-bold rounded-lg shadow-sm transition-all cursor-pointer font-sans"
+                                            >
+                                              🚀 Partition & Map
+                                            </button>
+                                          </div>
+                                        </div>
+
+                                        {/* OPTION 2: WRITE SINGLE QUESTION */}
+                                        <div className="bg-white border border-slate-200 p-3.5 rounded-xl shadow-3xs space-y-3">
+                                          <span className="text-[10.5px] font-bold text-slate-800 font-sans block leading-none">Option B: Define Custom Question Manually</span>
+                                          
+                                          <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                              <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block mb-0.5">Label Name</label>
+                                              <input
+                                                type="text"
+                                                value={inlineQName}
+                                                onChange={(e) => setInlineQName(e.target.value)}
+                                                placeholder="e.g. Q1"
+                                                className="bg-slate-50 border border-slate-200 focus:bg-white rounded px-2 py-1 text-xs text-slate-900 w-full outline-none font-sans focus:border-indigo-400 transition-all font-medium"
+                                              />
+                                            </div>
+                                            <div>
+                                              <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block mb-0.5">Max Marks</label>
+                                              <input
+                                                type="text"
+                                                value={inlineQMaxMarks}
+                                                onChange={(e) => setInlineQMaxMarks(e.target.value)}
+                                                placeholder="5"
+                                                className="bg-slate-50 border border-slate-200 focus:bg-white rounded px-2 py-1 text-xs text-slate-900 w-full outline-none font-mono focus:border-indigo-400 transition-all font-bold text-center"
+                                              />
+                                            </div>
+                                          </div>
+
+                                          <div>
+                                            <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Target Outcome (CLO)</label>
+                                            <div className="flex flex-wrap gap-1">
+                                              {Array.from({ length: selectedCourse.cloCount || 4 }, (_, idx) => `CLO-${idx + 1}`).map(clo => {
+                                                const isSel = inlineQMappedCLOs.includes(clo);
+                                                return (
+                                                  <button
+                                                    key={clo}
+                                                    type="button"
+                                                    onClick={() => {
+                                                      setInlineQMappedCLOs(prev => {
+                                                        if (prev.includes(clo)) return prev.filter(c => c !== clo);
+                                                        return [...prev, clo];
+                                                      });
+                                                    }}
+                                                    className={`px-2 py-0.5 text-[10px] font-bold font-mono rounded transition-all border ${
+                                                      isSel 
+                                                        ? 'bg-amber-500 border-amber-600 text-white shadow-3xs' 
+                                                        : 'bg-slate-50 border-slate-200 text-slate-655 hover:bg-slate-100'
+                                                    }`}
+                                                  >
+                                                    {clo}
+                                                  </button>
+                                                );
+                                              })}
+                                            </div>
+                                          </div>
+
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              if (!inlineQName.trim()) {
+                                                alert("Please enter a question label (e.g. Q1).");
+                                                return;
+                                              }
+                                              const marks = parseFloat(inlineQMaxMarks);
+                                              if (isNaN(marks) || marks <= 0) {
+                                                alert("Please enter a valid positive number for marks.");
+                                                return;
+                                              }
+                                              if (inlineQMappedCLOs.length === 0) {
+                                                alert("Please associate this question with at least one Course Learning Outcome (CLO).");
+                                                return;
+                                              }
+
+                                              handleAddInlineQuestion(curCat, curUnit, inlineQName, marks, inlineQMappedCLOs);
+                                              setInlineQName('');
+                                              setInlineQMappedCLOs([]);
+                                            }}
+                                            className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold rounded-lg shadow-sm transition-colors flex items-center justify-center gap-1.5 font-sans cursor-pointer"
+                                          >
+                                            <Plus className="w-3.5 h-3.5" />
+                                            Define & Open Spreadsheet
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
+
+
 
               {/* TAB 6: OBE COCKPIT */}
               {activeTab === 'obe' && selectedCourse && (
@@ -2814,7 +4557,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                             Map to CLOs (Tick Boxes)
                           </label>
                           <div className="grid grid-cols-2 gap-2 text-slate-800 font-sans">
-                            {['CLO-1', 'CLO-2', 'CLO-3', 'CLO-4'].map(clo => {
+                            {Array.from({ length: selectedCourse.cloCount || 4 }, (_, i) => `CLO-${i + 1}`).map(clo => {
                               const checked = qClos.includes(clo);
                               return (
                                 <label
@@ -3091,7 +4834,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                         const qs = selectedCourse.obeQuestions || [];
                         const marks = selectedCourse.obeMarks || {};
 
-                        const cloPerformance = ['CLO-1', 'CLO-2', 'CLO-3', 'CLO-4'].map(clo => {
+                        const cloPerformance = Array.from({ length: selectedCourse.cloCount || 4 }, (_, i) => `CLO-${i + 1}`).map(clo => {
                           const cloQs = qs.filter(q => q.mappedCLOs.includes(clo));
                           let totalClassMax = 0;
                           let totalClassObs = 0;
@@ -3195,7 +4938,7 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                                     <tr>
                                       <th className="py-2.5 px-4 font-bold">Registration No</th>
                                       <th className="py-2.5 px-3 font-bold border-r border-slate-200">FullName</th>
-                                      {['CLO-1', 'CLO-2', 'CLO-3', 'CLO-4'].map(clo => (
+                                      {Array.from({ length: selectedCourse.cloCount || 4 }, (_, i) => `CLO-${i + 1}`).map(clo => (
                                         <th key={clo} className="py-2.5 px-3 text-center border-r border-slate-200 font-bold bg-slate-100/10">
                                           {clo} (%)
                                         </th>
@@ -3208,8 +4951,8 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                                       const attList: { name: string; pct: number | null; attained: boolean }[] = [];
                                       let totalAttained = 0;
                                       let clCountWithData = 0;
-
-                                      const cellRender = ['CLO-1', 'CLO-2', 'CLO-3', 'CLO-4'].map(clo => {
+ 
+                                      const cellRender = Array.from({ length: selectedCourse.cloCount || 4 }, (_, i) => `CLO-${i + 1}`).map(clo => {
                                         const cloQs = qs.filter(q => q.mappedCLOs.includes(clo));
                                         let stdMax = 0;
                                         let stdObs = 0;
@@ -3353,18 +5096,18 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
       </AnimatePresence>
 
 
-      {/* SET MARKS UNIT MODAL - Restyled to white background and note removed */}
+      {/* SET MARKS UNIT MODAL - Restyled with fixed viewport constraints and beautiful internal scroll */}
       <AnimatePresence>
         {unitEditingCategory && selectedCourse && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 z-50 overflow-hidden">
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              className="bg-white border border-slate-200 rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden text-slate-800 font-sans"
+              className="bg-white border border-slate-200 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden text-slate-800 font-sans"
             >
               
-              {/* Modern Title Bar with Slate-50 Background */}
-              <div className="bg-slate-50 border-b border-slate-200 px-5 py-4 flex items-center justify-between">
+              {/* Modern Title Bar with Slate-50 Background (Locked on top) */}
+              <div className="bg-slate-50 border-b border-slate-200 px-5 py-4 flex items-center justify-between shrink-0">
                 <span className="text-sm font-bold text-slate-900 flex items-center gap-2">
                   <BookOpen className="w-5 h-5 text-indigo-600" />
                   Set Marks Unit ({unitEditingCategory})
@@ -3378,21 +5121,73 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
               </div>
 
               {/* Scrollable Modal Content */}
-              <div className="p-5 space-y-4">
+              <div className="p-5 space-y-4 overflow-y-auto flex-1 max-h-[calc(90vh-65px)]">
+
+                {/* Success banner inside the modal */}
+                {unitSaveSuccessMsg && (
+                  <div className="bg-emerald-50 border border-emerald-300 border-l-4 border-l-emerald-600 p-3.5 rounded-xl flex items-start gap-3 shadow-2xs animate-fade-in">
+                    <Check className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                    <div>
+                      <h4 className="text-xs font-extrabold text-emerald-950 uppercase tracking-wider">Saved Successfully</h4>
+                      <p className="text-[11px] text-emerald-850 mt-1 font-sans">
+                        {unitSaveSuccessMsg}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Error banner when CLO selection is missing */}
+                {unitCloValidationError && (
+                  <div className="bg-rose-50 border border-rose-350 border-l-4 border-l-rose-700 p-3.5 rounded-xl flex items-start gap-3 shadow-2xs animate-fade-in">
+                    <AlertTriangle className="w-5 h-5 text-rose-700 shrink-0 mt-0.5" />
+                    <div>
+                      <h4 className="text-xs font-extrabold text-rose-950 uppercase tracking-wider">Unmapped CLO Detected</h4>
+                      <p className="text-[11px] text-rose-850 mt-1 font-sans">
+                        Please associate a <strong className="font-extrabold">Course Learning Outcome (CLO)</strong> for all of your questions before saving. Missing mappings are highlighted in red below.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Error banner when weightage exceeds 100% */}
+                {totalUnitWeightSum > 100 && (
+                  <div className="bg-rose-50 border border-rose-300 border-l-4 border-l-rose-600 p-3.5 rounded-xl flex items-start gap-3 shadow-2xs animate-fade-in">
+                    <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                    <div>
+                      <h4 className="text-xs font-extrabold text-rose-950 uppercase tracking-wider">Weightage Limit Exceeded</h4>
+                      <p className="text-[11px] text-rose-800 mt-1 font-sans">
+                        The cumulative weightage of your units is <strong className="font-extrabold">{totalUnitWeightSum}%</strong>, which exceeds the allowed maximum of <strong>100%</strong>. Please adjust unit weightages.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Warning banner when weightage is below 100% */}
+                {totalUnitWeightSum < 100 && (
+                  <div className="bg-amber-50 border border-amber-300 border-l-4 border-l-amber-655 p-3.5 rounded-xl flex items-start gap-3 shadow-2xs animate-fade-in">
+                    <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                    <div>
+                      <h4 className="text-xs font-extrabold text-amber-950 uppercase tracking-wider">Weightage Sum is Under 100%</h4>
+                      <p className="text-[11px] text-amber-850 mt-1 font-sans">
+                        The cumulative weightage of your units is <strong className="font-extrabold">{totalUnitWeightSum}%</strong>, which is currently less than the expected <strong>100%</strong>. Please adjust unit weightages to equal exactly 100%.
+                      </p>
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
                   
                   {/* Left Column: Data Grid Table */}
                   <div className="md:col-span-9 space-y-2">
                     <div className="border border-slate-200 rounded-xl bg-white overflow-hidden shadow-xs">
-                      <table className="w-full text-left text-xs font-sans">
+                       <table className="w-full text-left text-xs font-sans">
                         <thead>
                           <tr className="bg-slate-50 text-slate-700 border-b border-slate-200 font-semibold">
                             <th className="py-2 px-2.5 w-8"></th>
                             <th className="py-2 px-2.5">Unit No</th>
-                            <th className="py-2 px-2.5 text-center">Passing</th>
                             <th className="py-2 px-2.5 text-center">Total Marks</th>
                             <th className="py-2 px-2.5 text-center">Weightage</th>
+                            <th className="py-2 px-2.5 text-center">Mapped CLOs</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 font-mono text-slate-700 font-medium">
@@ -3414,14 +5209,24 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
                                 <td className="py-2 px-2.5 font-bold">
                                   {unit.unitNo}
                                 </td>
-                                <td className="py-2 px-2.5 text-center text-emerald-600 font-bold">
-                                  {unit.passing}
-                                </td>
                                 <td className="py-2 px-2.5 text-center text-sky-600 font-bold">
                                   {unit.totalMarks}
                                 </td>
                                 <td className={`py-2 px-2.5 text-center font-extrabold ${isSelected ? 'text-indigo-600' : 'text-slate-600'}`}>
                                   {unit.weightage}%
+                                </td>
+                                <td className="py-2 px-2.5 text-center">
+                                  <div className="flex flex-wrap gap-1 justify-center">
+                                    {unit.mappedCLOs && unit.mappedCLOs.length > 0 ? (
+                                      unit.mappedCLOs.map(clo => (
+                                        <span key={clo} className="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-indigo-50 border border-indigo-150 text-indigo-700 font-mono">
+                                          {clo}
+                                        </span>
+                                      ))
+                                    ) : (
+                                      <span className="text-[10px] text-slate-400 italic">None</span>
+                                    )}
+                                  </div>
                                 </td>
                               </tr>
                             );
@@ -3432,7 +5237,18 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
 
                     <div className="flex justify-between items-center bg-slate-50 p-2.5 rounded-lg border border-slate-200 text-[11px] font-mono text-slate-600">
                       <span>No of Best Units: <strong className="text-slate-800">0</strong></span>
-                      <span>Total Weights Sum: <strong className="text-indigo-600 font-bold">{totalUnitWeightSum}%</strong></span>
+                      <span>
+                        Total Weights Sum:{" "}
+                        <strong className={
+                          totalUnitWeightSum > 100 
+                            ? "text-rose-600 font-extrabold animate-pulse" 
+                            : totalUnitWeightSum < 100 
+                              ? "text-amber-600 font-bold" 
+                              : "text-emerald-600 font-extrabold pb-0.5 px-1 bg-emerald-50 border border-emerald-200 rounded"
+                        }>
+                          {totalUnitWeightSum}%
+                        </strong>
+                      </span>
                     </div>
                   </div>
 
@@ -3456,55 +5272,171 @@ export default function InstructorDashboard({ onLogout, instructorName = 'Prof. 
 
                 {/* Bottom Section: Editor Card for highlighted row */}
                 {tempUnits[selectedUnitIndex] && (
-                  <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-3">
-                    <h4 className="text-xs uppercase tracking-wider font-bold text-slate-700 border-b border-slate-250 pb-1.5 font-mono">
-                      {unitEditingCategory} # {tempUnits[selectedUnitIndex].unitNo} Configurer
-                    </h4>
+                  <div className="bg-slate-50 border border-slate-200 p-5 rounded-2xl space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                      <h4 className="text-xs uppercase tracking-wider font-bold text-slate-800 font-sans flex items-center gap-1.5">
+                        <Sliders className="w-4 h-4 text-indigo-600" />
+                        {unitEditingCategory} # {tempUnits[selectedUnitIndex].unitNo} Configuration cockpit
+                      </h4>
+                      <span className="text-[10px] font-mono font-bold bg-indigo-50 border border-indigo-150 text-indigo-700 px-2 py-0.5 rounded">
+                        Active Unit
+                      </span>
+                    </div>
 
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-white p-3.5 border border-slate-200 rounded-xl shadow-xs">
                       <div>
-                        <label className="block text-[10px] text-slate-500 font-mono font-bold mb-1">
-                          Total Marks
-                        </label>
-                        <input
-                          type="number"
-                          value={unitTotalMarks}
-                          onChange={(e) => handleUnitTotalMarksChange(e.target.value)}
-                          className="bg-white border border-slate-300 rounded px-2.5 py-1 text-xs text-slate-900 w-full font-mono outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] text-slate-500 font-mono font-bold mb-1">
-                          Pass Marks
-                        </label>
-                        <input
-                          type="number"
-                          value={unitPassMarks}
-                          onChange={(e) => handleUnitPassMarksChange(e.target.value)}
-                          className="bg-white border border-slate-300 rounded px-2.5 py-1 text-xs text-slate-900 w-full font-mono outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
-                        />
-                      </div>
-
-                      <div className="col-span-2 sm:col-span-1">
-                        <label className="block text-[10px] text-slate-500 font-mono font-bold mb-1">
-                          Weightage (%)
+                        <label className="block text-[10px] text-slate-500 font-mono font-bold mb-1 uppercase tracking-wider">
+                          Unit Weightage (%)
                         </label>
                         <input
                           type="number"
                           value={unitWeightage}
                           onChange={(e) => handleUnitWeightageChange(e.target.value)}
-                          className="bg-white border border-slate-300 rounded px-2.5 py-1 text-xs text-slate-900 w-full font-mono outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                          className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 w-full font-mono outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-bold"
                         />
+                        <p className="text-[10px] text-slate-400 mt-1">Weightage of this unit towards the overall category percentage.</p>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] text-slate-500 font-mono font-bold mb-1 uppercase tracking-wider">
+                          Unit Total Marks
+                        </label>
+                        <input
+                          type="number"
+                          disabled={!!(tempUnits[selectedUnitIndex].questions && tempUnits[selectedUnitIndex].questions!.length > 0)}
+                          value={unitTotalMarks}
+                          onChange={(e) => handleUnitTotalMarksChange(e.target.value)}
+                          className="bg-slate-100/70 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 w-full font-mono outline-none font-extrabold disabled:opacity-75 disabled:cursor-not-allowed"
+                        />
+                        <p className="text-[10px] text-slate-500 mt-1 font-sans">
+                          {tempUnits[selectedUnitIndex].questions && tempUnits[selectedUnitIndex].questions!.length > 0
+                            ? "✨ Summed and locked from sub-questions below."
+                            : "Set manually or add question breakdown below."}
+                        </p>
                       </div>
                     </div>
 
-                    <div className="flex justify-end pt-2">
+                    {/* Highly Professional Questions Mapping Builder */}
+                    <div className="space-y-3 pt-1">
+                      <div className="flex items-center justify-between border-b border-slate-200/80 pb-2">
+                        <div>
+                          <h5 className="text-xs font-bold text-slate-900">Questions & CLO Mapping</h5>
+                          <p className="text-[10.5px] text-slate-500 mt-0.5">Define detailed questions and map each individually to Course Learning Outcomes (CLOs).</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleAddSubQuestion}
+                          className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold rounded-lg shadow-sm transition-colors cursor-pointer flex items-center gap-1"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Add Question
+                        </button>
+                      </div>
+
+                      <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
+                        {!tempUnits[selectedUnitIndex].questions || tempUnits[selectedUnitIndex].questions!.length === 0 ? (
+                          <div className="text-center py-6 border border-dashed border-slate-200 rounded-xl bg-white/50">
+                            <Sliders className="w-6 h-6 text-slate-350 mx-auto opacity-75 animate-pulse" />
+                            <p className="text-[11.5px] font-bold text-slate-500 mt-2">No sub-questions added yet</p>
+                            <p className="text-[10px] text-slate-450 mt-0.5 px-4">
+                              Click the <strong className="text-indigo-600">Add Question</strong> button above to start partition and map each part of this assessment dynamically to different CLOs.
+                            </p>
+                          </div>
+                        ) : (
+                          tempUnits[selectedUnitIndex].questions!.map((q, qIdx) => {
+                            const isCloEmpty = !q.mappedCLOs || q.mappedCLOs.length === 0 || !q.mappedCLOs[0];
+                            const isValidationErrorActive = unitCloValidationError && isCloEmpty;
+
+                            return (
+                              <div 
+                                key={q.id} 
+                                className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl p-2.5 transition-all shadow-2xs border ${
+                                  isValidationErrorActive 
+                                    ? "bg-rose-50 border-rose-450 ring-2 ring-rose-100 animate-pulse" 
+                                    : "bg-white border-slate-200 hover:border-slate-300"
+                                }`}
+                              >
+                                {/* Question Selector Label & Label Input */}
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <span className={`text-[10px] font-mono font-extrabold px-2 py-1 rounded transition-colors ${
+                                    isValidationErrorActive
+                                      ? "text-rose-700 bg-rose-100 ring-1 ring-rose-200"
+                                      : "text-indigo-655 bg-indigo-50/75"
+                                  }`}>
+                                    Q{qIdx + 1}
+                                  </span>
+                                  <input
+                                    type="text"
+                                    value={q.name}
+                                    onChange={(e) => handleUpdateSubQuestion(q.id, { name: e.target.value })}
+                                    className="bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded px-1.5 py-1 text-xs text-slate-900 font-bold outline-none w-24 transition-all"
+                                    placeholder="Label"
+                                  />
+                                </div>
+
+                                {/* CLO Mapping Single Selection Dropdown */}
+                                <div className="flex items-center gap-1.5 grow max-w-xs font-sans">
+                                  <label className={`text-[9px] font-mono font-bold uppercase tracking-widest shrink-0 transition-colors ${
+                                    isValidationErrorActive ? "text-rose-600 font-extrabold animate-pulse" : "text-slate-400"
+                                  }`}>CLO:</label>
+                                  <select
+                                    value={q.mappedCLOs && q.mappedCLOs.length > 0 ? q.mappedCLOs[0] : ""}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      const nextCLOs = val ? [val] : [];
+                                      handleUpdateSubQuestion(q.id, { mappedCLOs: nextCLOs });
+                                      // Clear error state if CLO is now valid
+                                      if (val) {
+                                        setUnitCloValidationError(false);
+                                      }
+                                    }}
+                                    className={`rounded-lg px-2 py-1 text-xs font-bold outline-none cursor-pointer w-full transition-all border ${
+                                      isValidationErrorActive
+                                        ? "bg-rose-50 border-rose-400 text-rose-900 focus:ring-1 focus:ring-rose-500 focus:border-rose-500 hover:bg-rose-100/30"
+                                        : "bg-slate-50 hover:bg-white focus:bg-white border-slate-200 hover:border-slate-300 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 text-slate-800"
+                                    }`}
+                                  >
+                                    <option value="" className="text-slate-400 font-semibold focus:bg-white">-- Select CLO --</option>
+                                    {Array.from({ length: selectedCourse.cloCount || 4 }, (_, i) => `CLO-${i + 1}`).map(clo => (
+                                      <option key={clo} value={clo} className="text-slate-800 font-bold font-mono focus:bg-white">
+                                        {clo}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+
+                                {/* Max Marks Input & Delete Action */}
+                                <div className="flex items-center gap-2 shrink-0 justify-end sm:justify-start">
+                                  <label className="text-[9.5px] font-mono font-bold text-slate-400 uppercase tracking-widest shrink-0 font-sans">Marks:</label>
+                                  <input
+                                    type="number"
+                                    value={q.maxMarks}
+                                    onChange={(e) => handleUpdateSubQuestion(q.id, { maxMarks: parseFloat(e.target.value) || 0 })}
+                                    className="bg-slate-50 hover:bg-white focus:bg-white border border-slate-200 focus:border-indigo-500 rounded-lg px-2 py-1 text-xs text-slate-955 w-14 font-mono font-extrabold text-center outline-none focus:ring-1 focus:ring-indigo-500 transition-all font-bold"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveSubQuestion(q.id)}
+                                    className="p-1 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded-lg transition-colors cursor-pointer"
+                                    title="Remove question"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex justify-between items-center pt-2 border-t border-slate-250">
+                      <p className="text-[9.5px] text-slate-450 italic">Sub-question updates synchronize automatically above.</p>
                       <button
                         onClick={handleUpdateUnitSingle}
                         className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-sm transition-colors cursor-pointer"
                       >
-                        Update
+                        Update Unit Summary
                       </button>
                     </div>
 

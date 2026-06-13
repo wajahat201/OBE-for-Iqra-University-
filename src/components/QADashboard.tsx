@@ -615,10 +615,10 @@ export default function QADashboard({ onLogout }: QADashboardProps) {
             {/* BACK TO LOGIN */}
             <button
               onClick={onLogout}
-              className="flex items-center gap-1.5 px-3 py-1 text-xs font-sans font-bold text-slate-700 hover:text-indigo-600 hover:bg-slate-200 rounded cursor-pointer transition-all mr-2.5 border-r border-slate-300 pr-3.5"
+              className="px-3.5 py-1.5 text-xs font-sans font-bold rounded-lg cursor-pointer transition-all flex items-center gap-1.5 bg-slate-800 hover:bg-slate-900 hover:scale-[1.02] text-white border border-slate-800 shadow-xs mr-3"
               title="Back to login selection"
             >
-              <ArrowLeft className="w-3.5 h-3.5 text-slate-500" />
+              <ArrowLeft className="w-3.5 h-3.5 text-white shrink-0" />
               <span>Back</span>
             </button>
             
